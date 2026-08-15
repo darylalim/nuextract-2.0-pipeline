@@ -134,11 +134,21 @@ without the leading dot (`env.example`) or narrow the rules at that point.
 - **Personal overrides** go in `.claude/settings.local.json`, which stays
   gitignored — use it for machine-specific tweaks without touching the shared
   set. Note this does *not* extend to loosening the deny rules above.
-- **Tests are not hooked, and CI does not cover every branch.** A `Stop` hook
-  that ran the suite locally was removed: it duplicated the CI gate, cost ~9s per
-  turn, and keyed on `git status` (working-tree state) rather than what the turn
-  actually changed, so any dirty `.py` file made it fire on every turn —
-  including pure-conversation ones. But `.github/workflows/ci.yml` triggers only
-  on `push` to `main` and PRs *targeting* `main`, so **a pushed feature branch
-  with no PR runs no tests at all**. Run `uv run pytest` before pushing, or drop
-  the `branches:` filter from the `push:` trigger to close the window properly.
+- **Tests are not a Claude Code hook — they are a git hook.** A `Stop` hook that
+  ran the suite was removed: it cost ~9s per turn and keyed on `git status`
+  (working-tree state) rather than what the turn changed, so one dirty `.py` file
+  made it fire on every turn, including pure-conversation ones. Its job moved to
+  [`.githooks/pre-push`](../../.githooks/pre-push), which is the right
+  granularity — once per *push* instead of once per turn — and which also
+  protects a hand-typed `git push`, something no agent hook can do. It runs all
+  four CI gates (`ruff check` → `ruff format --check` → `ty check` → `pytest`),
+  cheapest first, not just the suite: `py-checks.sh` only covers files *Claude*
+  edits, so a hand-edit with a lint error would otherwise reach `main`. Enable it
+  per clone with `git config core.hooksPath .githooks`; bypass once with
+  `git push --no-verify`.
+- **CI now runs on every branch.** `ci.yml`'s `push:` trigger was
+  `branches: [main]`, so with this repo's local-merge-then-push-main workflow it
+  only ever saw code that had already landed. It is now `branches: ["**"]` plus
+  `workflow_dispatch`, with `pull_request` kept for fork PRs. GitHub Actions is
+  free on standard runners for public repositories, so the wider trigger costs
+  nothing.

@@ -2,9 +2,29 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # Every branch, not just main. This repo's workflow is local branch ->
+    # local merge -> push main, so a `branches: [main]` filter meant CI only
+    # ever saw code that had already landed on the default branch. Tags are
+    # excluded: release.yml owns `v*`. Push the branch first, so CI has run on
+    # the commit before you tag it.
+    branches: ["**"]
   pull_request:
+    # Kept alongside the unfiltered push trigger for fork PRs — a push to a
+    # fork does not trigger this repository's workflows.
     branches: [main]
+  workflow_dispatch:
+
+# Supersede in-flight runs for the same feature-branch ref. Main pushes get a
+# per-run group so they never supersede or queue behind each other, and every
+# commit on the default branch keeps its own run.
+#
+# `cancel-in-progress: false` alone is NOT enough to protect main: GitHub
+# cancels an already-*pending* run in a group unconditionally when a new one
+# queues, so a shared main group would let a third push discard the second
+# push's queued run — and a slow run would head-of-line-block every later one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:

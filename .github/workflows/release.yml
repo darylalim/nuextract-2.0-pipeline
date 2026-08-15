@@ -1,8 +1,11 @@
 name: Release
 
 # Auto-publishes a GitHub Release whenever a version tag (v*) is pushed.
-# Workflow: bump `version` in pyproject.toml, commit, then
+# Workflow: bump `version` in pyproject.toml, commit, `git push`, THEN
 #   git tag vX.Y.Z && git push origin vX.Y.Z
+# Push the branch before tagging. ci.yml's push trigger never matches a tag ref,
+# and this job has no status gate, so tagging an unpushed commit would publish a
+# Release from code CI has never run.
 # The tag (vX.Y.Z) must match `version` in pyproject.toml, or the job fails
 # before creating the release (see the verify step below).
 # The v1.2.0 release was created by hand (curated notes, no prior tag to diff

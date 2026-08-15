@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# pre-push hook: run the test suite before anything reaches the remote.
+#
+# WHY HERE, and not a Claude Code Stop hook (which this replaced): this repo's
+# workflow is local branch -> local merge -> push main, so CI — which runs on
+# the remote — only ever sees code that has already landed on the default
+# branch. A pre-push hook is the last point where a regression can still be
+# caught before it is published. It also fires once per *push* rather than once
+# per assistant turn (the Stop hook's flaw: it keyed on working-tree state, so a
+# single dirty .py file made it run on every turn), and unlike any agent hook it
+# protects a hand-typed `git push` too.
+#
+# ENABLE PER CLONE — git does not share hooks itself, so this is opt-in:
+#     git config core.hooksPath .githooks
+#
+# Bypass a single push with `git push --no-verify`.
+#
+# CAVEAT: pytest runs against the working tree, which is not necessarily
+# identical to the commits being pushed. A dirty tree is warned about below but
+# not treated as an error.
+set -uo pipefail
+
+cd "$(git rev-parse --show-toplevel)" || exit 0
+
+# Git feeds one line per ref on stdin:
+#   <local_ref> <local_sha> <remote_ref> <remote_sha>
+# A branch deletion has an all-zero local_sha and pushes no code, so there is
+# nothing to test. Reading zero lines means the hook was invoked outside git's
+# normal protocol — run the suite rather than silently skipping it.
+refs=0
+pushes_content=""
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+  refs=$((refs + 1))
+  case "$local_sha" in
+    # Any non-zero character means a real update rather than a delete. Matching
+    # on "not all zeros" rather than a literal 40-char zero sha keeps this
+    # correct under sha256 repositories, where the null oid is 64 characters.
+    *[!0]*) pushes_content=1 ;;
+  esac
+done
+if [ "$refs" -gt 0 ] && [ -z "$pushes_content" ]; then
+  exit 0   # deletions only
+fi
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "pre-push: uv not found — skipping checks. See README 'Quickstart'." >&2
+  exit 0
+fi
+
+# `git diff --quiet HEAD` is blind to untracked files, and pytest collects them
+# (an untracked tests/test_*.py is picked up; a module you forgot to `git add`
+# passes here and then fails CI at import). Check both.
+if ! git diff --quiet HEAD 2>/dev/null ||
+   [ -n "$(git ls-files --others --exclude-standard 2>/dev/null)" ]; then
+  echo "pre-push: note — the working tree has uncommitted or untracked changes;" >&2
+  echo "          the checks below test those, not exactly the pushed commits." >&2
+fi
+
+# Run every gate CI runs, cheapest first, so a lint error aborts in ~0.5s rather
+# than after the ~9s suite. Gating on pytest alone would let a ruff or ty failure
+# push cleanly onto main and turn CI red there — the outcome this hook exists to
+# prevent. Deliberately no `--fix` and no bare `ruff format`: a hook that
+# rewrites the tree mid-push would make the tested tree differ from the reviewed
+# one. Report and stop at the first failure.
+run_gate() {
+  local out
+  if ! out="$("$@" 2>&1)"; then
+    {
+      echo "pre-push: \`$*\` failed — push aborted."
+      echo "Fix the failures, or bypass this once with: git push --no-verify"
+      echo
+      printf '%s\n' "$out" | tail -30
+    } >&2
+    exit 1
+  fi
+}
+
+run_gate uv run ruff check .
+run_gate uv run ruff format --check .
+run_gate uv run ty check
+run_gate uv run pytest -q
+exit 0
