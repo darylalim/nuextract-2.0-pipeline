@@ -1,5 +1,5 @@
 # Streamlit theme — professional GitHub-inspired palette.
-# All keys validated against Streamlit 1.58.0's theme schema.
+# All keys validated against Streamlit 1.61.1's theme schema.
 # Defining both [theme.light] and [theme.dark] keeps the app readable in
 # either mode instead of locking it to one.
 

@@ -95,7 +95,7 @@ Exact values vary with the model; fields it can't fill come back `null` (here th
 - **Not on Apple Silicon** — MLX runs only on Apple-Silicon Macs (M1–M4). On Intel Macs, Linux, or Windows the model will fail to load and there is no CPU/CUDA fallback. Use the [hosted HF Space](https://huggingface.co/spaces/numind/NuExtract3) instead.
 - **First run looks stuck** — it's downloading the ~5 GB model; watch progress in the terminal, not the browser. Interrupted downloads resume on the next run (Hugging Face caches partial files).
 - **Out of memory or very slow generation** — the 8-bit model needs ~5–6 GB of unified memory plus KV cache. On 16 GB machines, close other apps, lower **Max tokens**, and keep inputs shorter.
-- **`Qwen3VLImageProcessor` / transformers errors** — dependency versions are pinned in `pyproject.toml` (notably `transformers==5.12.1` and `torchvision`, both required even for text-only runs). Run `uv sync` to restore the locked versions and avoid upgrading these manually.
+- **`Qwen3VLImageProcessor` / transformers errors** — dependency versions are pinned in `pyproject.toml` (notably `transformers==5.15.0` and `torchvision`, both required even for text-only runs). Run `uv sync` to restore the locked versions and avoid upgrading these manually.
 
 ## Development
 
