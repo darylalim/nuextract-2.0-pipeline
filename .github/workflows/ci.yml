@@ -12,13 +12,22 @@ jobs:
     runs-on: macos-14
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        # Exact tag, not @v10: astral-sh/setup-uv stopped publishing moving
+        # major tags after v7, so @v10 does not resolve.
+        uses: astral-sh/setup-uv@v10.0.1
         with:
+          # Pin uv itself. Every Python dependency is `==`-pinned and read via
+          # `uv sync --frozen`, so letting the tool that reads the lock float
+          # would leave one unpinned input that can break CI with no repo change.
+          version: "0.12.4"
           enable-cache: true
 
+      # The interpreter comes from .python-version (3.13); uv downloads it if
+      # the runner image doesn't ship it, so the runner image can't silently
+      # change which Python the suite runs against.
       - name: Install dependencies
         run: uv sync --frozen
 

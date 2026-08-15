@@ -163,8 +163,11 @@ def stream_extract(
         kwargs["image"] = [image_path]
     accumulated = ""
     for chunk in mlx_vlm_stream_generate(model, processor, prompt, **kwargs):
-        delta = str(chunk.text) if hasattr(chunk, "text") else str(chunk)
-        accumulated += delta
+        # Read .text directly rather than falling back to str(chunk): if a future
+        # mlx-vlm renames the field, an AttributeError here is the loud failure we
+        # want. The fallback would instead splice the whole GenerationResult repr
+        # into the output — and no test would catch it, since they all feed stubs.
+        accumulated += chunk.text
         yield accumulated
 
 
