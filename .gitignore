@@ -9,7 +9,11 @@ __pycache__/
 .ty_cache/
 
 # Secrets / env (.streamlit/config.toml is tracked; only secrets are ignored)
-.env
+# `.env*` (not bare `.env`) so .env.local / .env.production / .envrc are covered
+# too, and this list stays in sync with the permissions.deny rules in
+# .claude/settings.json — those block Claude from touching such a file, which
+# reads as "protected" and makes a git-committable one especially dangerous.
+.env*
 .streamlit/secrets.toml
 
 # OS / local
