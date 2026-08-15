@@ -9,6 +9,9 @@ What this verifies (in order):
   3. Passing mode='markdown' (no template) produces 【task】content (markdown maps to content per the template)
   4. Passing mode='template-generation' produces 【task】template generation
   5. End-to-end generate() returns parseable JSON on a trivial extraction
+  6. End-to-end generate() with an image reaches the vision path and returns
+     parseable JSON (the only check that exercises torchvision / the image
+     processor — every test in tests/ mocks mlx_vlm.stream_generate)
 
 NOTE: The HF Space uses vLLM, which accepts kwargs nested under `chat_template_kwargs`.
 HF transformers' apply_chat_template expects them as direct keyword arguments instead.
@@ -21,6 +24,8 @@ from __future__ import annotations
 import json
 import re
 import sys
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from mlx_vlm import generate, load
@@ -36,6 +41,24 @@ def _print_check(name: str, ok: bool, detail: str = "") -> bool:
     flag = "PASS" if ok else "FAIL"
     print(f"  [{flag}] {name}" + (f" — {detail}" if detail else ""))
     return ok
+
+
+def _render_probe_image(dest: Path) -> Path:
+    """Render a small document-like PNG so check 6 has real pixels to process.
+
+    Generated rather than committed so the probe stays self-contained and the
+    repo carries no binary fixture.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    image = Image.new("RGB", (640, 220), "white")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default(size=34)
+    draw.text((40, 40), "INVOICE", fill="black", font=font)
+    draw.text((40, 100), "Name: John Doe", fill="black", font=font)
+    draw.text((40, 150), "Age: 30", fill="black", font=font)
+    image.save(dest)
+    return dest
 
 
 def _render(processor: Any, messages: list[dict], **kwargs: Any) -> str:
@@ -179,6 +202,50 @@ def main() -> int:
             )
     except Exception as e:
         print(f"  [FAIL] generate() raised: {type(e).__name__}: {e}")
+        passes.append(False)
+
+    # --- Check 6: end-to-end generation from an image (vision path) ---
+    _print_header("Check 6: end-to-end generate() with an image")
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_path = _render_probe_image(Path(tmpdir) / "probe.png")
+            image_messages = [
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "image": str(image_path)}],
+                }
+            ]
+            rendered_image = _render(
+                processor,
+                image_messages,
+                template=template_str,
+                enable_thinking=False,
+            )
+            print("  Generating from image (exercises the image processor)...")
+            output = generate(
+                model,
+                processor,
+                rendered_image,
+                image=[str(image_path)],
+                max_tokens=256,
+                verbose=False,
+            )
+        output_text = output.text if hasattr(output, "text") else str(output)
+        print(f"  Raw output: {output_text!r}")
+        json_match = re.search(r"\{[\s\S]*\}", output_text)
+        parsed = json.loads(json_match.group(0)) if json_match else None
+        # The point is that the vision path runs and produces our schema; OCR
+        # accuracy on a synthetic image is not what this check is gating.
+        ok = isinstance(parsed, dict) and "name" in parsed and "age" in parsed
+        passes.append(
+            _print_check(
+                "image input reaches the vision path and returns typed JSON",
+                ok,
+                f"parsed={parsed}",
+            )
+        )
+    except Exception as e:
+        print(f"  [FAIL] image generate() raised: {type(e).__name__}: {e}")
         passes.append(False)
 
     _print_header("VERDICT")

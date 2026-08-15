@@ -3,9 +3,10 @@
 Loads numind/NuExtract3-mlx-8bits via mlx-vlm and exposes streaming generation
 across the three NuExtract3 modes (structured / markdown / template-generation).
 
-Includes a fix-up shim for the upstream packaging bug where the MLX repo's
-processor_config.json references Qwen3VLImageProcessor (doesn't exist in
-transformers) instead of Qwen2VLImageProcessor (what numind/NuExtract3 uses).
+Includes a fix-up shim for a conversion bug in the MLX repo: its
+processor_config.json declares Qwen3VLImageProcessor, while the model author's
+own numind/NuExtract3 declares Qwen2VLImageProcessor. Upstream is authoritative,
+so the rewrite stays correct regardless of what transformers ships.
 """
 
 from __future__ import annotations
@@ -33,9 +34,19 @@ MODE_TEMPLATE_GENERATION = "template-generation"
 def patch_processor_config(local_dir: str | Path) -> bool:
     """Replace Qwen3VLImageProcessor with Qwen2VLImageProcessor in the local copy.
 
-    The MLX repo's processor_config.json references a class that doesn't exist
-    in transformers; the upstream (non-MLX) numind/NuExtract3 uses the correct
-    Qwen2VLImageProcessor. Idempotent — returns True if it changed anything.
+    numind/NuExtract3-mlx-8bits declares "Qwen3VLImageProcessor" in its
+    processor_config.json; the model author's own numind/NuExtract3 declares
+    "Qwen2VLImageProcessor", with otherwise identical geometry (patch_size 16,
+    merge_size 2, temporal_patch_size 2). Upstream is authoritative, so this is
+    a conversion bug in the MLX repo — not a workaround for a missing class.
+
+    Do NOT gate this on `hasattr(transformers, "Qwen3VLImageProcessor")`. That
+    the class is currently absent from transformers is why the bug is *visible*
+    (load fails loudly today), not why the rewrite is *correct*; adding such a
+    gate would silently stop patching the day transformers ships the class and
+    load preprocessing the model author never specified.
+
+    Idempotent — returns True if it changed anything.
     """
     config_path = Path(local_dir) / "processor_config.json"
     if not config_path.exists():
@@ -142,6 +153,11 @@ def stream_extract(
     kwargs: dict[str, Any] = {
         "max_tokens": max_tokens,
         "temperature": temperature,
+        # mlx-vlm defaults this to False, which leaves the EOS token (<|im_end|>)
+        # in the decoded text. Structured/template modes hide it because
+        # extract_answer_block re-parses the JSON, but markdown mode renders and
+        # downloads the raw string, so the saved .md ends with a literal token.
+        "skip_special_tokens": True,
     }
     if image_path:
         kwargs["image"] = [image_path]

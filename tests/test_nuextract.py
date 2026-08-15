@@ -43,6 +43,35 @@ def test_patch_processor_config_missing_file(tmp_path):
     assert patch_processor_config(tmp_path) is False
 
 
+# --- transformers compatibility invariants ---
+#
+# The transformers pin is load-bearing and these two facts are what make the
+# stack work. Both are model-free one-liners, so CI gates them instead of a
+# checklist item in CLAUDE.md that a future bump can quietly skip.
+
+
+def test_qwen3_5_is_in_the_auto_config_resolver():
+    """The model's architecture must be resolvable by AutoConfig.
+
+    NuExtract3 is Qwen3.5-family; if a transformers bump drops 'qwen3_5' from
+    the mapping, load_model() fails with an unrecognized-model-type error.
+    """
+    from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
+
+    assert "qwen3_5" in CONFIG_MAPPING_NAMES
+
+
+def test_qwen2_vl_image_processor_is_still_exported():
+    """patch_processor_config rewrites the config to name this class.
+
+    If a transformers bump removes or renames it, the shim would point the
+    processor at a class that cannot be resolved.
+    """
+    import transformers
+
+    assert hasattr(transformers, "Qwen2VLImageProcessor")
+
+
 # --- build_messages ---
 
 
@@ -359,6 +388,21 @@ def test_stream_extract_forwards_template_and_generation_kwargs():
     gen_kwargs = mock_sg.call_args.kwargs
     assert gen_kwargs["temperature"] == 0.7
     assert gen_kwargs["max_tokens"] == 512
+
+
+def test_stream_extract_skips_special_tokens():
+    """mlx-vlm defaults skip_special_tokens=False, which leaves <|im_end|> in
+    the decoded text — visible in markdown output and the downloaded .md."""
+    chunks = [MagicMock(text="ok")]
+    processor = MagicMock()
+    processor.apply_chat_template.return_value = "PROMPT"
+
+    with patch(
+        "nuextract.mlx_vlm_stream_generate", return_value=iter(chunks)
+    ) as mock_sg:
+        list(stream_extract(MagicMock(), processor, text="hi"))
+
+    assert mock_sg.call_args.kwargs["skip_special_tokens"] is True
 
 
 def test_stream_extract_forwards_system_prompt():

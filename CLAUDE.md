@@ -60,12 +60,13 @@ Two-column layout. Left: inputs. Right: action buttons + outputs (wrapped in an 
 
 ### `scripts/probe_mlx_vlm.py`
 
-Standalone probe to verify the migration still works on a fresh machine. Five checks:
+Standalone probe to verify the migration still works on a fresh machine. Six checks:
 1. `mlx_vlm.load()` succeeds on `numind/NuExtract3-mlx-8bits`
 2. `processor.apply_chat_template(template=..., enable_thinking=False)` produces a rendered prompt with the typed template embedded under `【template_start】`
 3. `mode='markdown'` reassigns to `【task】content` (per the Jinja's mode-collapsing logic)
 4. `mode='template-generation'` produces `【task】template generation`
 5. End-to-end `mlx_vlm.generate()` returns parseable JSON for a trivial extraction
+6. End-to-end `mlx_vlm.generate(image=[...])` on a PIL-rendered PNG returns typed JSON — the **only** coverage of the vision path (torchvision + the image processor), since every test in `tests/` mocks `mlx_vlm.stream_generate`. The image is generated at run time, so no binary fixture is committed.
 
 Run: `uv run python scripts/probe_mlx_vlm.py`. Exits non-zero on any failure.
 
@@ -73,9 +74,9 @@ Run: `uv run python scripts/probe_mlx_vlm.py`. Exits non-zero on any failure.
 
 - **Model**: `numind/NuExtract3-mlx-8bits` — 8-bit affine quant of NuExtract3 (Qwen3.5 4B base), ~5 GB on disk
 - **Context**: 131K tokens supported by the model, but practical limit is bounded by unified memory + KV cache size
-- **Pinned transformers**: `==5.15.0` (the model's declared `transformers_version` is `5.5.4` but `qwen3_5` only enters the auto-resolver mapping in later versions; `5.15.0` is the verified-working version — `qwen3_5` is still in the resolver, `Qwen2VLImageProcessor` is still exported, and `Qwen3VLImageProcessor` still does not exist, so the `patch_processor_config` shim remains necessary). Re-verify these three invariants on every transformers bump.
-- **Required torchvision**: HF's `Qwen2VLImageProcessor` requires it even for text-only inference — the processor is constructed eagerly on load.
-- **Packaging-bug shim** in `nuextract.patch_processor_config()`: the MLX repo's `processor_config.json` references `Qwen3VLImageProcessor` (doesn't exist in transformers); upstream `numind/NuExtract3` correctly uses `Qwen2VLImageProcessor`. The shim patches the locally cached copy on every `load_model()` call (idempotent).
+- **Pinned transformers**: `==5.15.0`. The floor is **not freely chosen** — `mlx-vlm==0.6.13` declares `transformers>=5.14.0`, so transformers cannot be rolled back without also downgrading mlx-vlm. (The model's own declared `transformers_version` is `5.5.4`, but `qwen3_5` only enters the auto-resolver mapping in much later versions.) Two invariants make the stack work — `qwen3_5` in `CONFIG_MAPPING_NAMES` and `Qwen2VLImageProcessor` still exported — and both are asserted by model-free tests in `tests/test_nuextract.py`, so CI gates them rather than a checklist.
+- **Required torchvision**: as of transformers 5.15 the image-processor mapping is backend-keyed — `qwen3_5 → {"torchvision": "Qwen2VLImageProcessor", "pil": "Qwen2VLImageProcessorPil"}` — so the image processor alone no longer forces torchvision. The hard requirement now comes from `Qwen3VLVideoProcessor`, which the processor constructs eagerly on load and which requires PyTorch. `torchvision` stays a direct dependency (it is what pulls `torch` into the tree); dropping it is not a simple deletion.
+- **Packaging-bug shim** in `nuextract.patch_processor_config()`: `numind/NuExtract3-mlx-8bits` declares `Qwen3VLImageProcessor`; the model author's own `numind/NuExtract3` declares `Qwen2VLImageProcessor` with otherwise identical geometry. **Upstream is authoritative, so this is a conversion bug in the MLX repo, not a workaround for a class missing from transformers.** Do not gate the shim on `hasattr(transformers, "Qwen3VLImageProcessor")` — the class being absent today is why the bug is *visible* (load fails loudly), not why the rewrite is *correct*; such a gate would silently stop patching the day transformers ships the class. The shim patches the locally cached copy on every `load_model()` call (idempotent).
 - **Template kwarg API**: HF transformers' `apply_chat_template` accepts template variables as **direct keyword arguments** (e.g. `template="..."`, `mode="..."`, `enable_thinking=False`). The HF Space uses vLLM which expects them nested under `chat_template_kwargs={...}` — that convention does **not** apply to direct HF/mlx-vlm usage.
 - **Modes (from `chat_template.jinja`)**: setting `template=...` forces `mode='structured'`; `mode='markdown'` is reassigned to `'content'`; `mode='template-generation'` and `'document-detection'` are also valid. `enable_thinking=True` is only allowed for `structured` and `content` modes.
 - **Output parsing**: NuExtract3 may emit `<answer>...</answer>` wrappers around structured output or raw JSON. `extract_answer_block` handles both.
@@ -87,8 +88,8 @@ Run: `uv run python scripts/probe_mlx_vlm.py`. Exits non-zero on any failure.
 
 ## Tests
 
-Total: 90 tests across three files, no real model loaded. These are `pytest`-collected counts — parametrization expands `test_nuextract.py`'s 29 `def test_` functions into 40 cases, so a raw `grep -c 'def test_'` undercounts.
+Total: 93 tests across three files, no real model loaded. These are `pytest`-collected counts — parametrization expands `test_nuextract.py`'s 32 `def test_` functions into 43 cases, so a raw `grep -c 'def test_'` undercounts.
 
-- **`tests/test_nuextract.py`** (40) — Pure function tests for the runtime wrapper. `extract_answer_block` and `pretty_json_or_text` cases are parametrized; integration boundaries (`load_model`, `stream_extract`) are tested by patching the `nuextract.*` namespace.
+- **`tests/test_nuextract.py`** (43) — Pure function tests for the runtime wrapper. `extract_answer_block` and `pretty_json_or_text` cases are parametrized; integration boundaries (`load_model`, `stream_extract`) are tested by patching the `nuextract.*` namespace. Two tests import `transformers` directly to assert the compatibility invariants (see Key Details) — the only tests that touch a real dependency, and they load no model.
 - **`tests/test_streamlit_app.py`** (25) — Helper function tests. The module-scoped `app` fixture mocks all Streamlit primitives + `nuextract.load_model` so `streamlit_app` imports cleanly without a real model (`st.fragment` is patched to an identity decorator so the `_output_section` fragment body runs under the mocks). Includes a regression test that removing an upload cleans up the orphaned temp file and session state.
 - **`tests/test_streamlit_app_apptest.py`** (25) — End-to-end UI wiring via Streamlit's `AppTest`. `nuextract.load_model` is stubbed out. The `at_with_image` fixture drives a fake image into `st.file_uploader` via AppTest's native `set_value` API (added in Streamlit 1.56), exercising the real widget. Covers initial render (including the Result-pane empty-state hint rendered by the `_output_section` fragment), button validation, and streaming flow for text- and image-input paths (including the instructions field, template-gen system prompt, and template-gen reasoning override). `st.download_button` isn't exposed by AppTest — its rendering is tested in `test_streamlit_app.py`.
