@@ -108,7 +108,9 @@ uv run pytest            # Tests (93)
 
 `uv run python scripts/probe_mlx_vlm.py` runs an end-to-end probe (downloads the model and performs a real extraction) to verify the setup on a fresh machine.
 
-CI (GitHub Actions, `macos-14` Apple Silicon runners) runs lint, format check, type check, and tests on **every branch push**, on PRs to `main`, and on demand via `workflow_dispatch`.
+CI (GitHub Actions, `macos-15` Apple Silicon runners) runs lint, format check, type check, and tests on **every branch push**, on pull requests, and on demand via `workflow_dispatch`. The test suite needs no network and no model — it passes against an empty Hugging Face cache.
+
+Releasing is automated by the same workflow: bump `version` in `pyproject.toml`, commit, and push to `main`. Once the four gates pass, CI tags `v<version>` and publishes a GitHub Release with notes built from the commit log. There is no separate `git tag` step — a version that is already tagged is simply skipped.
 
 Optionally, enable the tracked git hooks so these gates run before each push (git does not share hooks itself, so this is opt-in per clone):
 
@@ -136,8 +138,8 @@ tests/
 .githooks/
   pre-push                          # Runs pytest before a push (opt-in: git config core.hooksPath .githooks)
 .github/workflows/
-  ci.yml                            # Lint + format check + type check + pytest on macOS runners
-  release.yml                       # Auto-publish a GitHub Release on version tags
+  ci.yml                            # Lint + format check + type check + pytest on macOS runners,
+                                    # then auto-release when pyproject.toml's version is bumped
 ```
 
 ## Contributing

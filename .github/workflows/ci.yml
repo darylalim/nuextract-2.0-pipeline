@@ -2,54 +2,42 @@ name: CI
 
 on:
   push:
-    # Every branch, not just main. This repo's workflow is local branch ->
-    # local merge -> push main, so a `branches: [main]` filter meant CI only
-    # ever saw code that had already landed on the default branch. Tags are
-    # excluded: release.yml owns `v*`. Push the branch first, so CI has run on
-    # the commit before you tag it.
+    # Every branch: the flow here is local branch -> local merge -> push main, so
+    # a [main] filter would only ever see code that had already landed. A branch
+    # glob never matches a tag ref, which is fine — releases are cut by the
+    # release job below from pyproject.toml's version, never by a tag push.
     branches: ["**"]
+  # Fork PRs only — a push inside a fork does not trigger this repo's workflows.
   pull_request:
-    # Kept alongside the unfiltered push trigger for fork PRs — a push to a
-    # fork does not trigger this repository's workflows.
-    branches: [main]
   workflow_dispatch:
-
-# Supersede in-flight runs for the same feature-branch ref. Main pushes get a
-# per-run group so they never supersede or queue behind each other, and every
-# commit on the default branch keeps its own run.
-#
-# `cancel-in-progress: false` alone is NOT enough to protect main: GitHub
-# cancels an already-*pending* run in a group unconditionally when a new one
-# queues, so a shared main group would let a third push discard the second
-# push's queued run — and a slow run would head-of-line-block every later one.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
-    # macos-14 provides Apple Silicon runners; MLX requires arm64 macOS.
-    runs-on: macos-14
+    # Apple Silicon: MLX is arm64-macOS only. Not macos-14 — that image is
+    # deprecated (brownouts from 2026-10-05, retired 2026-11-02, see
+    # actions/runner-images#13518). macos-26/macos-latest is the next step up.
+    runs-on: macos-15
+    # Without this a hung step burns GitHub's 360-minute default before failing.
+    # That has already happened twice (runs 28535758911 and 28543254192, both
+    # cancelled at exactly 6h inside "Run tests").
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v7
 
       - name: Install uv
-        # Exact tag, not @v10: astral-sh/setup-uv stopped publishing moving
-        # major tags after v7, so @v10 does not resolve.
+        # Exact tag, not @v10: setup-uv stopped publishing moving major tags
+        # after v7, so @v10 does not resolve.
         uses: astral-sh/setup-uv@v10.0.1
         with:
-          # Pin uv itself. Every Python dependency is `==`-pinned and read via
-          # `uv sync --frozen`, so letting the tool that reads the lock float
-          # would leave one unpinned input that can break CI with no repo change.
           version: "0.12.4"
           enable-cache: true
 
-      # The interpreter comes from .python-version (3.13); uv downloads it if
-      # the runner image doesn't ship it, so the runner image can't silently
-      # change which Python the suite runs against.
+      # --locked, not --frozen: it also asserts uv.lock still matches
+      # pyproject.toml, so a dependency edit that was never relocked fails here
+      # instead of silently testing the old pins.
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync --locked
 
       - name: Lint
         run: uv run ruff check .
@@ -62,6 +50,88 @@ jobs:
 
       - name: Run tests
         run: uv run pytest -v
-        # All tests are mocked — none load the real model — so the suite runs
-        # fast on CI. The model-loading smoke check is the manual probe:
-        # `uv run python scripts/probe_mlx_vlm.py` (not run in CI).
+
+  # Publishes a GitHub Release when pyproject.toml's version has no tag yet.
+  # This lives in ci.yml rather than a tag-triggered workflow because a tag
+  # pushed by GITHUB_TOKEN does not trigger anything: "events triggered by the
+  # GITHUB_TOKEN will not create a new workflow run". `needs: test` is therefore
+  # the only gate that actually guarantees the four checks ran on this commit.
+  release:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # required to create the tag and the release
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history + tags: the notes are built from the commit log
+
+      - name: Check whether this version needs releasing
+        id: check
+        # Bump detection asks "does tag v<version> already exist?" rather than
+        # diffing github.event.before..github.sha. The tag test is stateless, so
+        # it stays correct across force pushes, re-runs of an old workflow, and
+        # a single push carrying many commits.
+        run: |
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          if [ -z "${version}" ]; then
+            echo "::error::Could not read [project].version from pyproject.toml"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
+            echo "v${version} is already tagged — nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "v${version} has no tag yet — releasing it."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "version=${version}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release notes from the commit log
+        if: steps.check.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+        # Not `gh --generate-notes`: it summarises merged pull requests, and this
+        # repo releases straight from main, so it would emit little more than a
+        # compare link. Written to a file so commit subjects can never be
+        # interpreted as shell.
+        run: |
+          prev="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          {
+            echo "## What's Changed"
+            echo
+            if [ -n "${prev}" ]; then
+              git log --no-merges --pretty=format:'* %s' "${prev}..HEAD"
+            else
+              git log --no-merges --pretty=format:'* %s'
+            fi
+            echo
+            if [ -n "${prev}" ]; then
+              echo
+              echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${prev}...v${VERSION}"
+            fi
+          } > "${RUNNER_TEMP}/notes.md"
+          cat "${RUNNER_TEMP}/notes.md"
+
+      - name: Create the release
+        if: steps.check.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.check.outputs.version }}
+        # One API call creates BOTH the tag and the release: `--target` tags the
+        # commit itself, so nothing needs to `git push` a tag. Anything that is
+        # not plain N.N.N (1.3.0rc1, 1.3.0.dev1) ships as a prerelease so it
+        # cannot take the Latest badge.
+        run: |
+          flags=()
+          case "${VERSION}" in
+            *[!0-9.]*) flags+=(--prerelease) ;;
+          esac
+          gh release create "v${VERSION}" \
+            --target "${GITHUB_SHA}" \
+            --title "v${VERSION}" \
+            --notes-file "${RUNNER_TEMP}/notes.md" \
+            "${flags[@]}"
