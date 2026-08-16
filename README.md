@@ -103,7 +103,7 @@ Exact values vary with the model; fields it can't fill come back `null` (here th
 uv run ruff check .      # Lint
 uv run ruff format .     # Format
 uv run ty check          # Type check
-uv run pytest            # Tests (93)
+uv run pytest            # Tests (94)
 ```
 
 `uv run python scripts/probe_mlx_vlm.py` runs an end-to-end probe (downloads the model and performs a real extraction) to verify the setup on a fresh machine.
@@ -118,7 +118,7 @@ Optionally, enable the tracked git hooks so these gates run before each push (gi
 git config core.hooksPath .githooks
 ```
 
-[`.githooks/pre-push`](.githooks/pre-push) runs all four CI gates — lint, format check, type check, tests — cheapest first, and aborts the push at the first failure. Bypass a single push with `git push --no-verify`.
+[`.githooks/pre-push`](.githooks/pre-push) runs `uv lock --check` plus all four CI gates — lint, format check, type check, tests — cheapest first, and aborts the push at the first failure. Bypass a single push with `git push --no-verify`.
 
 ## Project Structure
 
@@ -131,12 +131,13 @@ pyproject.toml                      # Dependencies (pinned) + ruff/ty/pytest con
 scripts/
   probe_mlx_vlm.py                  # Verifies model + template kwargs flow-through end-to-end
 tests/
-  conftest.py                       # sys.path setup
-  test_nuextract.py                 # Wrapper tests (43)
+  conftest.py                       # sys.path setup + guard: no test may load a real model
+  test_nuextract.py                 # Wrapper tests (44)
   test_streamlit_app.py             # App helper tests (25)
   test_streamlit_app_apptest.py     # End-to-end UI tests via Streamlit AppTest (25)
 .githooks/
-  pre-push                          # Runs pytest before a push (opt-in: git config core.hooksPath .githooks)
+  pre-push                          # Runs uv lock --check + all four gates before a push
+                                    # (opt-in: git config core.hooksPath .githooks)
 .github/workflows/
   ci.yml                            # Lint + format check + type check + pytest on macOS runners,
                                     # then auto-release when pyproject.toml's version is bumped
@@ -153,7 +154,7 @@ uv run ty check
 uv run pytest
 ```
 
-Add or update tests where practical; the suite mocks the model so it runs fast (currently 93 tests). Enabling `git config core.hooksPath .githooks` runs all four of these gates automatically before each push. See [CLAUDE.md](CLAUDE.md) for an architecture overview.
+Add or update tests where practical; the suite mocks the model so it runs fast and needs no network (currently 94 tests). Enabling `git config core.hooksPath .githooks` runs all four of these gates, plus `uv lock --check`, automatically before each push. See [CLAUDE.md](CLAUDE.md) for an architecture overview.
 
 ## Acknowledgments
 

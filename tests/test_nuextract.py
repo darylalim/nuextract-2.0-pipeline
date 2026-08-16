@@ -307,6 +307,21 @@ def test_pretty_json_or_text(text, expected):
 # --- load_model integration boundary ---
 
 
+def test_conftest_guard_blocks_a_forgotten_mock():
+    """A loader reached without mocking fails immediately, never downloads.
+
+    Regression test for the guard itself: the bug it replaces made every CI run
+    pull 4.8 GB and hung two runs for six hours. If this test starts passing for
+    the wrong reason — i.e. the call succeeds — the guard has stopped working.
+    """
+    import nuextract as _nuextract
+
+    with pytest.raises(AssertionError, match="real model download"):
+        _nuextract.snapshot_download(repo_id="numind/NuExtract3-mlx-8bits")
+    with pytest.raises(AssertionError, match="real model download"):
+        _nuextract.mlx_vlm_load("/some/dir")
+
+
 def test_load_model_invokes_snapshot_and_patch_and_load():
     """load_model orchestrates: snapshot_download → patch → mlx_vlm.load."""
     with (

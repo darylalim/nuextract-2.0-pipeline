@@ -38,7 +38,13 @@ def app():
         stack.enter_context(patch.object(st, "slider", return_value=0.0))
         stack.enter_context(patch.object(st, "checkbox", return_value=False))
         stack.enter_context(patch.object(st, "button", return_value=False))
-        stack.enter_context(patch.object(st, "empty", return_value=MagicMock()))
+        # side_effect, not return_value: _output_section calls st.empty() three
+        # times (reasoning, output, download panes). A single return_value hands
+        # all three the same mock, so output routed to the wrong pane would still
+        # record its calls on the expected object and assert clean.
+        stack.enter_context(
+            patch.object(st, "empty", side_effect=lambda *a, **k: MagicMock())
+        )
         stack.enter_context(
             patch.object(
                 st,
