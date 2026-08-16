@@ -7,8 +7,9 @@ download happens.
 
 File-upload paths use the at_with_image fixture, which drives a fake image
 into st.file_uploader via AppTest's native set_value API (added in Streamlit
-1.56). st.download_button isn't exposed by AppTest at all; its rendering is
-covered separately in test_streamlit_app.py.
+1.56). AppTest does expose at.download_button, but its DownloadButton carries
+only label/help/value, so file_name/mime/payload assertions live in
+test_streamlit_app.py.
 """
 
 import json
@@ -197,9 +198,9 @@ def test_extract_with_text_streams_json_output(at, stream_captor):
     assert len(at.error) == 0
     assert len(at.warning) == 0
     # JSON appearing as a code block proves the streaming flow completed and
-    # _render_output_pane ran in structured mode. The download button itself
-    # isn't asserted here — st.download_button isn't exposed by AppTest;
-    # _render_download_button is tested directly in test_streamlit_app.py.
+    # _render_output_pane ran in structured mode. The download button's
+    # file_name/mime/payload are asserted in test_streamlit_app.py, since
+    # AppTest's DownloadButton exposes only label/help/value.
     assert any('"name": "Alice"' in c.value for c in at.code)
     assert captured["text"] == "doc text"
     assert captured["mode"] is None
