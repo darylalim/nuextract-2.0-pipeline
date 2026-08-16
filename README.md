@@ -7,9 +7,7 @@
 
 Streamlit application for structured extraction, document understanding, and template generation with NuMind NuExtract on Apple Silicon with MLX. Mirrors the [official NuExtract3 Hugging Face Space](https://huggingface.co/spaces/numind/NuExtract3) but runs entirely locally via [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) — no discrete GPU, CUDA, or external API required (inference runs on the Apple GPU via MLX/Metal).
 
-| Light theme | Dark theme |
-|:---:|:---:|
-| ![NuExtract Studio two-pane extraction UI, light theme](docs/screenshot-light.png) | ![NuExtract Studio two-pane extraction UI, dark theme](docs/screenshot-dark.png) |
+![NuExtract Studio two-pane extraction UI, dark theme](docs/screenshot-dark.png)
 
 ## Features
 
@@ -126,8 +124,6 @@ git config core.hooksPath .githooks
 streamlit_app.py                    # UI: two-pane layout, buttons + streamed output in an st.fragment
 nuextract.py                        # mlx-vlm wrapper: load, render prompt, stream extraction
 pyproject.toml                      # Dependencies (pinned) + ruff/ty/pytest config
-.streamlit/
-  config.toml                       # Theme: GitHub-inspired light/dark palette
 scripts/
   probe_mlx_vlm.py                  # Verifies model + template kwargs flow-through end-to-end
 tests/
