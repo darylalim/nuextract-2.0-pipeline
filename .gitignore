@@ -8,7 +8,8 @@ __pycache__/
 .pytest_cache/
 .ty_cache/
 
-# Secrets / env (.streamlit/config.toml is tracked; only secrets are ignored)
+# Secrets / env (only .streamlit/secrets.toml is ignored — the repo ships no
+# config.toml today, and one added back would be tracked by default)
 # `.env*` (not bare `.env`) so .env.local / .env.production / .envrc are covered
 # too, and this list stays in sync with the permissions.deny rules in
 # .claude/settings.json — those block Claude from touching such a file, which
