@@ -24,9 +24,10 @@ _ST_NOOPS = (
 def app():
     """Import streamlit_app with Streamlit + model loading mocked.
 
-    Patches are entered through an ExitStack rather than one `with` statement:
-    CPython caps a statement at 20 statically nested blocks, and this fixture
-    needs more than that.
+    Patches are entered through an ExitStack rather than one `with` statement.
+    The 21 context managers here sit exactly at CPython's statically-nested-
+    block ceiling (21 compiles, a 22nd raises SyntaxError at collection time,
+    on 3.12 and 3.13 alike), so the next patch added would break a flat `with`.
     """
     import streamlit as st
 

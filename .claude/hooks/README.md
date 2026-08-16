@@ -140,10 +140,13 @@ without the leading dot (`env.example`) or narrow the rules at that point.
   made it fire on every turn, including pure-conversation ones. Its job moved to
   [`.githooks/pre-push`](../../.githooks/pre-push), which is the right
   granularity — once per *push* instead of once per turn — and which also
-  protects a hand-typed `git push`, something no agent hook can do. It runs all
-  four CI gates (`ruff check` → `ruff format --check` → `ty check` → `pytest`),
-  cheapest first, not just the suite: `py-checks.sh` only covers files *Claude*
-  edits, so a hand-edit with a lint error would otherwise reach `main`. Enable it
+  protects a hand-typed `git push`, something no agent hook can do. It runs
+  `uv lock --check` first, then the four CI gates under `uv run --frozen`
+  (`ruff check` → `ruff format --check` → `ty check` → `pytest`), cheapest
+  first, not just the suite: `py-checks.sh` only covers files *Claude* edits,
+  so a hand-edit with a lint error would otherwise reach `main`. The `--frozen`
+  matters — a bare `uv run` relocks, so the gates would pass against a
+  regenerated lock while the committed one stayed stale. Enable it
   per clone with `git config core.hooksPath .githooks`; bypass once with
   `git push --no-verify`.
 - **CI now runs on every branch.** `ci.yml`'s `push:` trigger was
