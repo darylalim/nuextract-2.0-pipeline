@@ -1,4 +1,5 @@
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -6,39 +7,77 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# Streamlit primitives that only need to be silenced, not given a return value.
+_ST_NOOPS = (
+    "set_page_config",
+    "title",
+    "subheader",
+    "markdown",
+    "caption",
+    "space",
+    "image",
+    "spinner",
+)
+
 
 @pytest.fixture(scope="module")
 def app():
-    """Import streamlit_app with Streamlit + model loading mocked."""
+    """Import streamlit_app with Streamlit + model loading mocked.
+
+    Patches are entered through an ExitStack rather than one `with` statement:
+    CPython caps a statement at 20 statically nested blocks, and this fixture
+    needs more than that.
+    """
     import streamlit as st
 
-    with (
-        patch.object(st, "set_page_config"),
-        patch.object(st, "title"),
-        patch.object(st, "subheader"),
-        patch.object(st, "markdown"),
-        patch.object(st, "caption"),
-        patch.object(st, "space"),
-        patch.object(st, "file_uploader", return_value=None),
-        patch.object(st, "text_area", return_value=""),
-        patch.object(st, "image"),
-        patch.object(st, "slider", return_value=0.0),
-        patch.object(st, "checkbox", return_value=False),
-        patch.object(st, "button", return_value=False),
-        patch.object(st, "spinner"),
-        patch.object(st, "empty", return_value=MagicMock()),
-        patch.object(
-            st,
-            "columns",
-            side_effect=lambda spec, **kw: [
-                MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))
-            ],
-        ),
-        patch.object(st, "cache_resource", side_effect=lambda f: f),
-        patch.object(st, "fragment", side_effect=lambda f: f),
-        patch.object(st, "session_state", {}),
-        patch("streamlit_app.load_model", return_value=(MagicMock(), MagicMock())),
-    ):
+    with ExitStack() as stack:
+        for name in _ST_NOOPS:
+            stack.enter_context(patch.object(st, name))
+        stack.enter_context(patch.object(st, "file_uploader", return_value=None))
+        stack.enter_context(patch.object(st, "text_area", return_value=""))
+        stack.enter_context(patch.object(st, "slider", return_value=0.0))
+        stack.enter_context(patch.object(st, "checkbox", return_value=False))
+        stack.enter_context(patch.object(st, "button", return_value=False))
+        # side_effect, not return_value: _output_section calls st.empty() three
+        # times (reasoning, output, download panes). A single return_value hands
+        # all three the same mock, so output routed to the wrong pane would still
+        # record its calls on the expected object and assert clean.
+        stack.enter_context(
+            patch.object(st, "empty", side_effect=lambda *a, **k: MagicMock())
+        )
+        stack.enter_context(
+            patch.object(
+                st,
+                "columns",
+                side_effect=lambda spec, **kw: [
+                    MagicMock()
+                    for _ in range(spec if isinstance(spec, int) else len(spec))
+                ],
+            )
+        )
+        stack.enter_context(patch.object(st, "cache_resource", side_effect=lambda f: f))
+        stack.enter_context(patch.object(st, "fragment", side_effect=lambda f: f))
+        stack.enter_context(patch.object(st, "session_state", {}))
+
+        # Patch the dependency, not the consumer. `patch("streamlit_app.X")`
+        # resolves its target by IMPORTING streamlit_app, whose module body
+        # calls get_model() — so a real 4.8 GB model download fires during patch
+        # setup, before the mock is ever installed. The pop+import below then
+        # re-runs `from nuextract import load_model` and discards the mock too.
+        # Patching the nuextract.* namespace instead means that import binds the
+        # mock. snapshot_download and mlx_vlm_load are belt-and-braces, matching
+        # test_streamlit_app_apptest.py: even a path that bypasses load_model
+        # cannot reach the network.
+        stack.enter_context(
+            patch("nuextract.load_model", return_value=(MagicMock(), MagicMock()))
+        )
+        stack.enter_context(
+            patch("nuextract.snapshot_download", return_value="/fake/dir")
+        )
+        stack.enter_context(
+            patch("nuextract.mlx_vlm_load", return_value=(MagicMock(), MagicMock()))
+        )
+
         sys.modules.pop("streamlit_app", None)
         import streamlit_app
 
