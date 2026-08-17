@@ -47,8 +47,19 @@ TEMPLATE_GEN_GUIDANCE = (
 
 
 @st.cache_resource
-def get_model() -> tuple[Any, Any]:
-    return load_model()
+def get_model() -> tuple[Any, Any] | Exception:
+    """Load the model + processor pair once per server process.
+
+    Returns a failure rather than raising it, so the failure is cached too:
+    st.cache_resource writes an entry only when the function *returns*, so a
+    raising load is re-attempted on every rerun. The input widgets now render
+    before this runs and stay live through a failed load, which means every
+    slider drag or upload would otherwise queue another download attempt.
+    """
+    try:
+        return load_model()
+    except Exception as exc:
+        return exc
 
 
 _IMG_PATH_KEY = "_uploaded_image_path"
@@ -443,14 +454,18 @@ with col_left:
 
 with col_right:
     st.subheader("Output")
-    # The model load is the app's only slow step (~5 GB on a cold start) and it
-    # sits here, below the left column, rather than above the columns: Streamlit
-    # emits a UI delta per st.* call, so anything after a blocking call cannot
-    # paint until it returns. Loading here lets every input widget render first,
-    # so a first-time user can upload an image and edit the template while the
-    # download runs. Only the output pane, which genuinely needs the model,
-    # waits on it. st.spinner rather than st.skeleton because the message
-    # ("~5 GB") is the part that stops the wait from reading as a hang.
+    # Loading here, below the whole left column, is what lets the inputs paint
+    # first: Streamlit emits a UI delta per st.* call, so nothing after a
+    # blocking call renders until it returns. Only this pane needs the model.
     with st.spinner("Loading model (first run downloads ~5 GB)..."):
-        model, processor = get_model()
-    _output_section(model, processor)
+        loaded = get_model()
+    if isinstance(loaded, Exception):
+        st.error(f"Model failed to load — {type(loaded).__name__}: {loaded}")
+        # The failure is cached (see get_model), so retrying takes an explicit
+        # click rather than happening on every widget interaction.
+        if st.button("Retry model load", icon=":material/refresh:"):
+            get_model.clear()
+            st.rerun()
+    else:
+        model, processor = loaded
+        _output_section(model, processor)

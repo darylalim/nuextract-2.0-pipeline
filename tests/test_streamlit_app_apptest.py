@@ -17,26 +17,57 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 APP_PATH = str(Path(__file__).resolve().parent.parent / "streamlit_app.py")
 
 
-@pytest.fixture
-def at(monkeypatch):
-    """Build a fresh AppTest with model loading stubbed, already run once.
+def _stub_model_loading(monkeypatch, *, on_load=None):
+    """Stub every path that could reach a real 5 GB download.
 
     Patches load_model + snapshot_download + mlx_vlm_load as belt-and-suspenders
     insurance: even if a code path bypasses load_model, the lower-level functions
-    are no-op'd so no real 5 GB download can happen.
+    are no-op'd so no real download can happen. Shared by the `at` fixture and
+    the ordering guard so the set of stubbed boundaries is defined once — a
+    second copy would drift, and a missed boundary fails as a 4.8 GB download
+    rather than an obvious error. `on_load` fires when load_model is called, for
+    tests that need to observe the load itself.
     """
+
+    def fake_load_model(*_, **__):
+        if on_load is not None:
+            on_load()
+        return MagicMock(), MagicMock()
 
     def fake_model_pair(*_, **__):
         return MagicMock(), MagicMock()
 
-    monkeypatch.setattr("nuextract.load_model", fake_model_pair)
+    monkeypatch.setattr("nuextract.load_model", fake_load_model)
     monkeypatch.setattr("nuextract.snapshot_download", lambda *_, **__: "/fake/dir")
     monkeypatch.setattr("nuextract.mlx_vlm_load", fake_model_pair)
+
+
+@pytest.fixture
+def cold_model_cache():
+    """Clear the process-global st.cache_resource entry around a test.
+
+    get_model is cached for the life of the process, so a test that needs to
+    observe the load itself must clear first — otherwise an earlier test's entry
+    means the stub never runs and the assertion silently observes nothing.
+    Clearing on the way out too keeps the mutation from leaking: without it the
+    suite's cache would hold a pair built by this test's stub after monkeypatch
+    has already torn that stub down.
+    """
+    st.cache_resource.clear()
+    yield
+    st.cache_resource.clear()
+
+
+@pytest.fixture
+def at(monkeypatch):
+    """Build a fresh AppTest with model loading stubbed, already run once."""
+    _stub_model_loading(monkeypatch)
     instance = AppTest.from_file(APP_PATH)
     instance.run()
     return instance
@@ -120,35 +151,36 @@ def test_no_warnings_or_errors_on_initial_load(at):
     assert len(at.warning) == 0
 
 
-def test_model_loads_after_the_input_widgets_render(monkeypatch):
-    """The model load must sit below the left column, not above st.columns.
+def test_model_loads_after_the_input_widgets_render(monkeypatch, cold_model_cache):
+    """The model load must sit below the *whole* left column, not above st.columns.
 
     Streamlit emits a UI delta per st.* call, so a blocking load placed above
     the columns stops every input widget from painting until the ~5 GB download
     finishes. Asserted structurally rather than by timing: keyed widgets
-    register themselves in session_state as they render, so the template
-    editor's key is present when load_model is called if and only if the left
-    column already ran. Builds its own AppTest instead of using the `at`
-    fixture because it has to observe the load itself, and clears the resource
-    cache so get_model actually calls through on this run.
-    """
-    import streamlit as st
+    register themselves in session_state as they render, so the anchor key is
+    present when load_model is called if and only if that widget already ran.
 
+    The anchor is reasoning_checkbox — the *last* keyed widget in col_left — and
+    that choice is the whole point. An earlier anchor (template_input is only
+    the 3rd of 7) leaves the load free to sit mid-column with the instructions
+    field, both sliders and the checkbox still stuck behind the download, and
+    the test would still pass.
+    """
     seen: dict = {}
 
-    def fake_model_pair(*_, **__):
-        seen["inputs_rendered_first"] = "template_input" in st.session_state
-        return MagicMock(), MagicMock()
+    def record() -> None:
+        seen["inputs_rendered_first"] = "reasoning_checkbox" in st.session_state
 
-    monkeypatch.setattr("nuextract.load_model", fake_model_pair)
-    monkeypatch.setattr("nuextract.snapshot_download", lambda *_, **__: "/fake/dir")
-    monkeypatch.setattr("nuextract.mlx_vlm_load", fake_model_pair)
+    _stub_model_loading(monkeypatch, on_load=record)
 
-    st.cache_resource.clear()
-    AppTest.from_file(APP_PATH).run()
+    at = AppTest.from_file(APP_PATH)
+    at.run()
 
+    # Without this, a crash anywhere in col_left leaves `seen` empty and the
+    # ordering assertion below fails with a message blaming the wrong thing.
+    assert not at.exception
     assert seen.get("inputs_rendered_first") is True, (
-        "get_model() ran before the input widgets — move it below col_left"
+        "get_model() ran before the left column finished — move it below col_left"
     )
 
 

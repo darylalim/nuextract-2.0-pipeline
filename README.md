@@ -45,7 +45,7 @@ uv sync
 uv run streamlit run streamlit_app.py   # opens http://localhost:8501
 ```
 
-**First run** downloads the ~5 GB model (on top of the Python dependencies pulled during `uv sync`), so budget a few minutes on a typical connection. The Input pane renders right away — you can upload an image and edit the template while the download runs — while the Output pane shows a "Loading model (first run downloads ~5 GB)" spinner until the model is ready. Download progress prints in the terminal, not the browser. Later runs load from the local Hugging Face cache in seconds. Press Ctrl-C in the terminal to stop the app.
+**First run** downloads the ~5 GB model (on top of the Python dependencies pulled during `uv sync`), so budget a few minutes on a typical connection. The Input pane is on screen right away, with the Output pane showing a "Loading model (first run downloads ~5 GB)" spinner beside it. Anything you type or upload while the download runs is kept and applied once the model is ready — but the app can't redraw until then, so the image preview won't appear yet. Download progress prints in the terminal, not the browser. Later runs load from the local Hugging Face cache in seconds. Press Ctrl-C in the terminal to stop the app.
 
 ## Modes
 
@@ -91,7 +91,8 @@ Exact values vary with the model; fields it can't fill come back `null` (here th
 
 - **`command not found: uv`** — install uv (see [Quickstart](#quickstart)), then restart your shell.
 - **Not on Apple Silicon** — MLX runs only on Apple-Silicon Macs (M1–M4). On Intel Macs, Linux, or Windows the model will fail to load and there is no CPU/CUDA fallback. Use the [hosted HF Space](https://huggingface.co/spaces/numind/NuExtract3) instead.
-- **Output pane spins on first run** — it's downloading the ~5 GB model; watch progress in the terminal, not the browser. The Input pane stays usable meanwhile. Interrupted downloads resume on the next run (Hugging Face caches partial files).
+- **First run looks stuck / Output pane spins** — it's downloading the ~5 GB model; watch progress in the terminal, not the browser. The Input pane is already on screen meanwhile. Interrupted downloads resume on the next run (Hugging Face caches partial files).
+- **"Model failed to load"** — the error is shown in the Output pane with a **Retry model load** button. The failure is cached deliberately, so it won't retry itself on every click elsewhere in the app; use the button once you've fixed the cause.
 - **Out of memory or very slow generation** — the 8-bit model needs ~5–6 GB of unified memory plus KV cache. On 16 GB machines, close other apps, lower **Max tokens**, and keep inputs shorter.
 - **`Qwen3VLImageProcessor` / transformers errors** — dependency versions are pinned in `pyproject.toml` (notably `transformers==5.15.0` and `torchvision`, both required even for text-only runs). Run `uv sync` to restore the locked versions and avoid upgrading these manually.
 
