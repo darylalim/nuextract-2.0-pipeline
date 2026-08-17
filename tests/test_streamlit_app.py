@@ -335,7 +335,8 @@ def test_render_output_pane_reasoning_completed_populates_both_panes(app):
 def test_render_output_pane_structured_mode_non_json_falls_back_to_markdown(app):
     """When structured mode is requested but the model returns plain text
     (extract_answer_block falls back to stripped text), render as markdown
-    instead of crashing."""
+    instead of crashing. This is a *final*-pass contract: mid-stream nothing
+    inspects the partial, so prose stays in the JSON code block until the end."""
     output_ph = MagicMock()
     reasoning_ph = MagicMock()
     app._render_output_pane(
@@ -344,6 +345,7 @@ def test_render_output_pane_structured_mode_non_json_falls_back_to_markdown(app)
         accumulated="model could not produce JSON for this document",
         reasoning_enabled=False,
         is_structured=True,
+        final=True,
     )
     # Non-JSON output → markdown render, not code block
     output_ph.markdown.assert_called_once()

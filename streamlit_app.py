@@ -151,20 +151,21 @@ def _render_output_pane(
             output_placeholder.caption("_(generating...)_")
         return
 
-    if is_structured:
-        # Only clean up the text once the stream has finished. extract_answer_block
-        # returns the longest span that *parses*, which mid-stream is never the
-        # truncated outer object — it is whichever nested object closed first, so
-        # running it per chunk makes the pane shrink to a sub-object and sit frozen
-        # there until the last token. The raw partial grows monotonically instead.
-        body = pretty_json_or_text(extract_answer_block(output)) if final else output
-        # `<answer>` is in the tuple for the streaming path only: the wrapper's
-        # closing tag arrives last, so until then extract_answer_block cannot
-        # strip it and the raw partial still leads with it. Without this the pane
-        # would render JSON as markdown for the whole run, then snap to a code
-        # block at the end. The final pass has already stripped it.
-        if body.startswith(("{", "[", "<answer>")):
-            output_placeholder.code(body, language="json")
+    if is_structured and not final:
+        # Mid-stream: show the raw partial, and do not inspect it to decide how.
+        # extract_answer_block and pretty_json_or_text have whole-document
+        # contracts every partial violates — the outer object is still truncated,
+        # so the longest span that *parses* is whichever nested object closed
+        # first, and the pane would shrink to it and freeze until the last token.
+        # Sniffing the prefix instead is no better: a preamble, an <answer>
+        # wrapper in any case, or a stray <think> would each route the JSON
+        # through the Markdown renderer for the whole run. Structured mode is
+        # asking for JSON, so render it as JSON and let the final pass judge.
+        output_placeholder.code(output, language="json", wrap_lines=True)
+    elif is_structured:
+        body = pretty_json_or_text(extract_answer_block(output))
+        if body.startswith("{") or body.startswith("["):
+            output_placeholder.code(body, language="json", wrap_lines=True)
         else:
             output_placeholder.markdown(body)
     else:
@@ -257,15 +258,18 @@ def _run_mode(
     # The stream is complete, so the text finally satisfies extract_answer_block's
     # whole-document contract: render once more to strip any <answer> wrapper and
     # pretty-print. Deliberately below the empty-output guard — above it, an
-    # empty run would repaint "(generating...)" over its own warning.
-    _render_output_pane(
-        output_placeholder,
-        reasoning_placeholder,
-        accumulated,
-        reasoning_enabled=reasoning,
-        is_structured=render_as_json,
-        final=True,
-    )
+    # empty run would repaint "(generating...)" over its own warning. Skipped for
+    # markdown mode, where this render is byte-identical to the last streaming one
+    # and would re-send a whole document — the largest one the app produces.
+    if render_as_json:
+        _render_output_pane(
+            output_placeholder,
+            reasoning_placeholder,
+            accumulated,
+            reasoning_enabled=reasoning,
+            is_structured=render_as_json,
+            final=True,
+        )
 
     _render_download_button(
         download_placeholder,
