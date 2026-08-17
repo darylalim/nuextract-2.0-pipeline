@@ -47,8 +47,19 @@ TEMPLATE_GEN_GUIDANCE = (
 
 
 @st.cache_resource
-def get_model() -> tuple[Any, Any]:
-    return load_model()
+def get_model() -> tuple[Any, Any] | Exception:
+    """Load the model + processor pair once per server process.
+
+    Returns a failure rather than raising it, so the failure is cached too:
+    st.cache_resource writes an entry only when the function *returns*, so a
+    raising load is re-attempted on every rerun. The input widgets now render
+    before this runs and stay live through a failed load, which means every
+    slider drag or upload would otherwise queue another download attempt.
+    """
+    try:
+        return load_model()
+    except Exception as exc:
+        return exc
 
 
 _IMG_PATH_KEY = "_uploaded_image_path"
@@ -233,7 +244,7 @@ def _run_mode(
 
 
 @st.fragment
-def _output_section(model: Any, processor: Any) -> None:
+def _output_section() -> None:
     """Fragment: action buttons + the streamed reasoning/result/download panes.
 
     Isolated in a fragment so clicking a generate button reruns only this
@@ -243,6 +254,10 @@ def _output_section(model: Any, processor: Any) -> None:
     when the triggering widget is inside it). Input values are read from
     session_state, which the keyed left-column widgets populate on the full
     rerun that precedes this fragment.
+
+    Loads the model itself rather than taking it as an argument, so the load
+    can sit below this section's own chrome instead of above it — see the
+    comment on the load below.
     """
     with st.container(horizontal=True):
         btn_extract = st.button(
@@ -270,6 +285,24 @@ def _output_section(model: Any, processor: Any) -> None:
     st.markdown("**Result**")
     output_placeholder = st.empty()
     download_placeholder = st.empty()
+
+    # The load runs here, after the buttons and both pane headers have claimed
+    # their positions, so the whole page is painted before it blocks: Streamlit
+    # emits a UI delta per st.* call, so only what follows this line waits on
+    # it. The wait shows inside the Result slot, where the output will land.
+    with output_placeholder.container():
+        with st.spinner("Loading model (first run downloads ~5 GB)..."):
+            loaded = get_model()
+    if isinstance(loaded, Exception):
+        with output_placeholder.container():
+            st.error(f"Model failed to load — {type(loaded).__name__}: {loaded}")
+            # Cached failure (see get_model): retrying is an explicit click,
+            # not something every widget interaction re-triggers.
+            if st.button("Retry model load", icon=":material/refresh:"):
+                get_model.clear()
+                st.rerun()
+        return
+    model, processor = loaded
 
     # Idle hint, shown only when no generate button fired this run: keeps the
     # Result pane from being blank on first load, without lingering over the
@@ -369,9 +402,6 @@ st.set_page_config(
 )
 st.title("NuExtract Studio")
 
-with st.spinner("Loading model (first run downloads ~5 GB)..."):
-    model, processor = get_model()
-
 col_left, col_right = st.columns([1, 1], gap="medium")
 
 with col_left:
@@ -446,4 +476,7 @@ with col_left:
 
 with col_right:
     st.subheader("Output")
-    _output_section(model, processor)
+    # No model load here: _output_section loads it itself, below its own buttons
+    # and pane headers, so nothing on the page waits on the ~5 GB download
+    # except the Result slot the output lands in.
+    _output_section()

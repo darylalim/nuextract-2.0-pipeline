@@ -17,26 +17,57 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 APP_PATH = str(Path(__file__).resolve().parent.parent / "streamlit_app.py")
 
 
-@pytest.fixture
-def at(monkeypatch):
-    """Build a fresh AppTest with model loading stubbed, already run once.
+def _stub_model_loading(monkeypatch, *, on_load=None):
+    """Stub every path that could reach a real 5 GB download.
 
     Patches load_model + snapshot_download + mlx_vlm_load as belt-and-suspenders
     insurance: even if a code path bypasses load_model, the lower-level functions
-    are no-op'd so no real 5 GB download can happen.
+    are no-op'd so no real download can happen. Shared by the `at` fixture and
+    the ordering guard so the set of stubbed boundaries is defined once — a
+    second copy would drift, and a missed boundary fails as a 4.8 GB download
+    rather than an obvious error. `on_load` fires when load_model is called, for
+    tests that need to observe the load itself.
     """
+
+    def fake_load_model(*_, **__):
+        if on_load is not None:
+            on_load()
+        return MagicMock(), MagicMock()
 
     def fake_model_pair(*_, **__):
         return MagicMock(), MagicMock()
 
-    monkeypatch.setattr("nuextract.load_model", fake_model_pair)
+    monkeypatch.setattr("nuextract.load_model", fake_load_model)
     monkeypatch.setattr("nuextract.snapshot_download", lambda *_, **__: "/fake/dir")
     monkeypatch.setattr("nuextract.mlx_vlm_load", fake_model_pair)
+
+
+@pytest.fixture
+def cold_model_cache():
+    """Clear the process-global st.cache_resource entry around a test.
+
+    get_model is cached for the life of the process, so a test that needs to
+    observe the load itself must clear first — otherwise an earlier test's entry
+    means the stub never runs and the assertion silently observes nothing.
+    Clearing on the way out too keeps the mutation from leaking: without it the
+    suite's cache would hold a pair built by this test's stub after monkeypatch
+    has already torn that stub down.
+    """
+    st.cache_resource.clear()
+    yield
+    st.cache_resource.clear()
+
+
+@pytest.fixture
+def at(monkeypatch):
+    """Build a fresh AppTest with model loading stubbed, already run once."""
+    _stub_model_loading(monkeypatch)
     instance = AppTest.from_file(APP_PATH)
     instance.run()
     return instance
@@ -118,6 +149,49 @@ def test_three_buttons_present(at):
 def test_no_warnings_or_errors_on_initial_load(at):
     assert len(at.error) == 0
     assert len(at.warning) == 0
+
+
+def test_model_loads_after_the_page_chrome_renders(monkeypatch, cold_model_cache):
+    """The ~5 GB load must run below *everything* that doesn't depend on it.
+
+    Streamlit emits a UI delta per st.* call, so a blocking load stops every
+    element after it from painting until it returns. Nothing but an actual
+    generation needs the model, so both the left column's inputs and the right
+    column's own chrome (action buttons, pane headers) must render first.
+
+    Asserted structurally rather than by timing, since render order is not
+    observable from AppTest: keyed widgets register themselves in session_state
+    as they render, so an anchor key is present when load_model is called if
+    and only if that widget already ran.
+
+    Both anchors are the *last* keyed widget of their group, and that is the
+    whole point — an anchor further up still passes with the load sitting in
+    the middle of the group it is supposed to be guarding. reasoning_checkbox
+    is the last of col_left's 7 inputs (template_input, the 3rd, would let the
+    load sit mid-column); template_button is the last of the three action
+    buttons.
+    """
+    seen: dict = {}
+
+    def record() -> None:
+        seen["inputs"] = "reasoning_checkbox" in st.session_state
+        seen["chrome"] = "template_button" in st.session_state
+
+    _stub_model_loading(monkeypatch, on_load=record)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    # Without this, a crash before either anchor leaves `seen` empty and the
+    # assertions below fail with a message blaming the wrong thing.
+    assert not at.exception
+    assert seen.get("inputs") is True, (
+        "get_model() ran before the left column finished — move it below col_left"
+    )
+    assert seen.get("chrome") is True, (
+        "get_model() ran before the action buttons rendered — move it below them "
+        "inside _output_section"
+    )
 
 
 def test_result_pane_shows_idle_hint_on_initial_load(at):
