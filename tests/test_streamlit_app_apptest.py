@@ -120,6 +120,38 @@ def test_no_warnings_or_errors_on_initial_load(at):
     assert len(at.warning) == 0
 
 
+def test_model_loads_after_the_input_widgets_render(monkeypatch):
+    """The model load must sit below the left column, not above st.columns.
+
+    Streamlit emits a UI delta per st.* call, so a blocking load placed above
+    the columns stops every input widget from painting until the ~5 GB download
+    finishes. Asserted structurally rather than by timing: keyed widgets
+    register themselves in session_state as they render, so the template
+    editor's key is present when load_model is called if and only if the left
+    column already ran. Builds its own AppTest instead of using the `at`
+    fixture because it has to observe the load itself, and clears the resource
+    cache so get_model actually calls through on this run.
+    """
+    import streamlit as st
+
+    seen: dict = {}
+
+    def fake_model_pair(*_, **__):
+        seen["inputs_rendered_first"] = "template_input" in st.session_state
+        return MagicMock(), MagicMock()
+
+    monkeypatch.setattr("nuextract.load_model", fake_model_pair)
+    monkeypatch.setattr("nuextract.snapshot_download", lambda *_, **__: "/fake/dir")
+    monkeypatch.setattr("nuextract.mlx_vlm_load", fake_model_pair)
+
+    st.cache_resource.clear()
+    AppTest.from_file(APP_PATH).run()
+
+    assert seen.get("inputs_rendered_first") is True, (
+        "get_model() ran before the input widgets — move it below col_left"
+    )
+
+
 def test_result_pane_shows_idle_hint_on_initial_load(at):
     """Before any run, the Result pane shows an empty-state hint (rendered into
     its placeholder by the _output_section fragment) instead of a blank pane."""

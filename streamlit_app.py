@@ -369,9 +369,6 @@ st.set_page_config(
 )
 st.title("NuExtract Studio")
 
-with st.spinner("Loading model (first run downloads ~5 GB)..."):
-    model, processor = get_model()
-
 col_left, col_right = st.columns([1, 1], gap="medium")
 
 with col_left:
@@ -446,4 +443,14 @@ with col_left:
 
 with col_right:
     st.subheader("Output")
+    # The model load is the app's only slow step (~5 GB on a cold start) and it
+    # sits here, below the left column, rather than above the columns: Streamlit
+    # emits a UI delta per st.* call, so anything after a blocking call cannot
+    # paint until it returns. Loading here lets every input widget render first,
+    # so a first-time user can upload an image and edit the template while the
+    # download runs. Only the output pane, which genuinely needs the model,
+    # waits on it. st.spinner rather than st.skeleton because the message
+    # ("~5 GB") is the part that stops the wait from reading as a hang.
+    with st.spinner("Loading model (first run downloads ~5 GB)..."):
+        model, processor = get_model()
     _output_section(model, processor)

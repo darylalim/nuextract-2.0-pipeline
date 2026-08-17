@@ -45,7 +45,7 @@ uv sync
 uv run streamlit run streamlit_app.py   # opens http://localhost:8501
 ```
 
-**First run** downloads the ~5 GB model (on top of the Python dependencies pulled during `uv sync`), so budget a few minutes on a typical connection. The browser shows a "Loading model (first run downloads ~5 GB)" spinner and will look idle while the download runs in the terminal — this is normal. Later runs load from the local Hugging Face cache in seconds. Press Ctrl-C in the terminal to stop the app.
+**First run** downloads the ~5 GB model (on top of the Python dependencies pulled during `uv sync`), so budget a few minutes on a typical connection. The Input pane renders right away — you can upload an image and edit the template while the download runs — while the Output pane shows a "Loading model (first run downloads ~5 GB)" spinner until the model is ready. Download progress prints in the terminal, not the browser. Later runs load from the local Hugging Face cache in seconds. Press Ctrl-C in the terminal to stop the app.
 
 ## Modes
 
@@ -91,7 +91,7 @@ Exact values vary with the model; fields it can't fill come back `null` (here th
 
 - **`command not found: uv`** — install uv (see [Quickstart](#quickstart)), then restart your shell.
 - **Not on Apple Silicon** — MLX runs only on Apple-Silicon Macs (M1–M4). On Intel Macs, Linux, or Windows the model will fail to load and there is no CPU/CUDA fallback. Use the [hosted HF Space](https://huggingface.co/spaces/numind/NuExtract3) instead.
-- **First run looks stuck** — it's downloading the ~5 GB model; watch progress in the terminal, not the browser. Interrupted downloads resume on the next run (Hugging Face caches partial files).
+- **Output pane spins on first run** — it's downloading the ~5 GB model; watch progress in the terminal, not the browser. The Input pane stays usable meanwhile. Interrupted downloads resume on the next run (Hugging Face caches partial files).
 - **Out of memory or very slow generation** — the 8-bit model needs ~5–6 GB of unified memory plus KV cache. On 16 GB machines, close other apps, lower **Max tokens**, and keep inputs shorter.
 - **`Qwen3VLImageProcessor` / transformers errors** — dependency versions are pinned in `pyproject.toml` (notably `transformers==5.15.0` and `torchvision`, both required even for text-only runs). Run `uv sync` to restore the locked versions and avoid upgrading these manually.
 
@@ -101,7 +101,7 @@ Exact values vary with the model; fields it can't fill come back `null` (here th
 uv run ruff check .      # Lint
 uv run ruff format .     # Format
 uv run ty check          # Type check
-uv run pytest            # Tests (94)
+uv run pytest            # Tests (95)
 ```
 
 `uv run python scripts/probe_mlx_vlm.py` runs an end-to-end probe (downloads the model and performs a real extraction) to verify the setup on a fresh machine.
@@ -130,7 +130,7 @@ tests/
   conftest.py                       # sys.path setup + guard: no test may load a real model
   test_nuextract.py                 # Wrapper tests (44)
   test_streamlit_app.py             # App helper tests (25)
-  test_streamlit_app_apptest.py     # End-to-end UI tests via Streamlit AppTest (25)
+  test_streamlit_app_apptest.py     # End-to-end UI tests via Streamlit AppTest (26)
 .githooks/
   pre-push                          # Runs uv lock --check + all four gates before a push
                                     # (opt-in: git config core.hooksPath .githooks)
@@ -150,7 +150,7 @@ uv run ty check
 uv run pytest
 ```
 
-Add or update tests where practical; the suite mocks the model so it runs fast and needs no network (currently 94 tests). Enabling `git config core.hooksPath .githooks` runs all four of these gates, plus `uv lock --check`, automatically before each push. See [CLAUDE.md](CLAUDE.md) for an architecture overview.
+Add or update tests where practical; the suite mocks the model so it runs fast and needs no network (currently 95 tests). Enabling `git config core.hooksPath .githooks` runs all four of these gates, plus `uv lock --check`, automatically before each push. See [CLAUDE.md](CLAUDE.md) for an architecture overview.
 
 ## Acknowledgments
 
