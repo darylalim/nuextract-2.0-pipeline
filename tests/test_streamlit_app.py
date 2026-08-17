@@ -323,9 +323,10 @@ def test_render_output_pane_reasoning_completed_populates_both_panes(app):
         reasoning_enabled=True,
         is_structured=True,
     )
-    # Reasoning text in reasoning_placeholder
-    reasoning_ph.markdown.assert_called_once()
-    assert "reasoning text here" in reasoning_ph.markdown.call_args[0][0]
+    # Reasoning text in reasoning_placeholder, as a code block rather than a
+    # hand-built markdown fence the trace itself could break out of.
+    reasoning_ph.code.assert_called_once()
+    assert "reasoning text here" in reasoning_ph.code.call_args[0][0]
     # JSON answer in output_placeholder
     output_ph.code.assert_called_once()
     assert "1" in output_ph.code.call_args[0][0]
@@ -347,6 +348,60 @@ def test_render_output_pane_structured_mode_non_json_falls_back_to_markdown(app)
     # Non-JSON output → markdown render, not code block
     output_ph.markdown.assert_called_once()
     output_ph.code.assert_not_called()
+
+
+def test_render_output_pane_streaming_partial_json_is_not_collapsed(app):
+    """Mid-stream the outer object is still truncated, so extract_answer_block
+    would return the nested object that closed first — visibly shrinking the
+    pane to a sub-object. The streaming path must show the raw partial."""
+    output_ph = MagicMock()
+    reasoning_ph = MagicMock()
+    partial = '{"title": "Q3", "amounts": [{"value": 1200, "currency": "USD"},'
+    app._render_output_pane(
+        output_ph,
+        reasoning_ph,
+        accumulated=partial,
+        reasoning_enabled=False,
+        is_structured=True,
+    )
+    rendered = output_ph.code.call_args[0][0]
+    assert rendered == partial
+    assert "Q3" in rendered
+
+
+def test_render_output_pane_streaming_answer_wrapper_still_renders_as_json(app):
+    """The <answer> closing tag arrives last, so mid-stream the partial leads
+    with the opening tag. It must still render as a JSON code block, not as
+    markdown that mangles the JSON until the final pass strips the wrapper."""
+    output_ph = MagicMock()
+    reasoning_ph = MagicMock()
+    app._render_output_pane(
+        output_ph,
+        reasoning_ph,
+        accumulated='<answer>{"title": "Q3", "amo',
+        reasoning_enabled=False,
+        is_structured=True,
+    )
+    output_ph.code.assert_called_once()
+    output_ph.markdown.assert_not_called()
+
+
+def test_render_output_pane_final_extracts_answer_and_pretty_prints(app):
+    """The completed text does satisfy extract_answer_block's contract, so the
+    final render strips the <answer> wrapper and pretty-prints."""
+    output_ph = MagicMock()
+    reasoning_ph = MagicMock()
+    app._render_output_pane(
+        output_ph,
+        reasoning_ph,
+        accumulated='<answer>{"k": 1}</answer>',
+        reasoning_enabled=False,
+        is_structured=True,
+        final=True,
+    )
+    rendered = output_ph.code.call_args[0][0]
+    assert "<answer>" not in rendered
+    assert rendered == '{\n  "k": 1\n}'
 
 
 def test_render_output_pane_reasoning_disabled_caption(app):

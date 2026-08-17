@@ -123,13 +123,22 @@ def _render_output_pane(
     *,
     reasoning_enabled: bool,
     is_structured: bool,
+    final: bool = False,
 ) -> None:
-    """Update the reasoning + output panes from a single accumulated stream chunk."""
+    """Update the reasoning + output panes from a single accumulated stream chunk.
+
+    `final` marks the one call made after the stream completes. Only then does
+    the text satisfy extract_answer_block's whole-document contract — see the
+    structured branch below.
+    """
     think, output = split_reasoning_and_output(accumulated, reasoning_enabled)
 
     if reasoning_enabled:
         if think:
-            reasoning_placeholder.markdown(f"```text\n{think}\n```")
+            # st.code, not a hand-built ```text fence: `think` is untrusted model
+            # output, and a fence inside it would close ours and hand the rest to
+            # the Markdown renderer. Markdown-mode reasoning quotes fences often.
+            reasoning_placeholder.code(think, language=None, wrap_lines=True)
         else:
             reasoning_placeholder.caption("_(no reasoning yet)_")
     else:
@@ -143,12 +152,21 @@ def _render_output_pane(
         return
 
     if is_structured:
-        answer = extract_answer_block(output)
-        pretty = pretty_json_or_text(answer)
-        if pretty.startswith("{") or pretty.startswith("["):
-            output_placeholder.code(pretty, language="json")
+        # Only clean up the text once the stream has finished. extract_answer_block
+        # returns the longest span that *parses*, which mid-stream is never the
+        # truncated outer object — it is whichever nested object closed first, so
+        # running it per chunk makes the pane shrink to a sub-object and sit frozen
+        # there until the last token. The raw partial grows monotonically instead.
+        body = pretty_json_or_text(extract_answer_block(output)) if final else output
+        # `<answer>` is in the tuple for the streaming path only: the wrapper's
+        # closing tag arrives last, so until then extract_answer_block cannot
+        # strip it and the raw partial still leads with it. Without this the pane
+        # would render JSON as markdown for the whole run, then snap to a code
+        # block at the end. The final pass has already stripped it.
+        if body.startswith(("{", "[", "<answer>")):
+            output_placeholder.code(body, language="json")
         else:
-            output_placeholder.markdown(pretty)
+            output_placeholder.markdown(body)
     else:
         output_placeholder.markdown(output)
 
@@ -203,6 +221,7 @@ def _run_mode(
 ) -> None:
     """Drive a streamed generation for one mode and update the UI panes live."""
     is_structured = template is not None and mode is None
+    render_as_json = is_structured or mode == MODE_TEMPLATE_GENERATION
     with st.spinner(f"{mode_label}..."):
         accumulated = ""
         try:
@@ -225,7 +244,7 @@ def _run_mode(
                     reasoning_placeholder,
                     accumulated,
                     reasoning_enabled=reasoning,
-                    is_structured=is_structured or mode == MODE_TEMPLATE_GENERATION,
+                    is_structured=render_as_json,
                 )
         except Exception as e:
             output_placeholder.error(f"{type(e).__name__}: {e}")
@@ -234,6 +253,19 @@ def _run_mode(
     if not accumulated.strip():
         output_placeholder.warning("Empty output from model.")
         return
+
+    # The stream is complete, so the text finally satisfies extract_answer_block's
+    # whole-document contract: render once more to strip any <answer> wrapper and
+    # pretty-print. Deliberately below the empty-output guard — above it, an
+    # empty run would repaint "(generating...)" over its own warning.
+    _render_output_pane(
+        output_placeholder,
+        reasoning_placeholder,
+        accumulated,
+        reasoning_enabled=reasoning,
+        is_structured=render_as_json,
+        final=True,
+    )
 
     _render_download_button(
         download_placeholder,
