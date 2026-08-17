@@ -358,14 +358,30 @@ def test_reasoning_enabled_splits_reasoning_and_output_panes(at, stream_captor):
     at.button(key="extract_button").click()
     at.run()
 
-    # Both panes render as code elements now, so match on their distinct
-    # contents and assert they landed in *different* elements — that is what
-    # proves the trace did not leak into the result pane, or vice versa.
-    trace = [c.value for c in at.code if "thinking step by step" in c.value]
-    result = [c.value for c in at.code if '"k": 1' in c.value]
-    assert len(trace) == 1
-    assert len(result) == 1
-    assert trace[0] != result[0]
+    # Both panes render as code elements now, so assert by *position*, not by
+    # content: the fragment creates the reasoning placeholder before the output
+    # one, so at.code[0] is the Reasoning pane and at.code[1] the Result pane.
+    # Matching on content alone would still pass with the two panes swapped.
+    assert len(at.code) == 2
+    assert "thinking step by step" in at.code[0].value
+    assert '"k": 1' not in at.code[0].value
+    assert '"k": 1' in at.code[1].value
+    assert "thinking step by step" not in at.code[1].value
+
+
+def test_completed_run_strips_answer_wrapper_and_pretty_prints(at, stream_captor):
+    """End-to-end cover for the post-stream `final=True` render in _run_mode.
+    Asserting the *exact* indented body is what makes this fail if that call is
+    ever dropped: the streaming render shows the raw wrapped text, so a test
+    that only checked for a substring would pass either way."""
+    _, set_chunks = stream_captor
+    set_chunks('<answer>{"k": 1}</answer>')
+
+    at.text_area(key="text_input").set_value("doc text")
+    at.button(key="extract_button").click()
+    at.run()
+
+    assert [c.value for c in at.code] == ['{\n  "k": 1\n}']
 
 
 def test_reasoning_trace_containing_a_code_fence_stays_in_one_element(
