@@ -45,7 +45,7 @@ uv sync
 uv run streamlit run streamlit_app.py   # opens http://localhost:8501
 ```
 
-**First run** downloads the ~5 GB model (on top of the Python dependencies pulled during `uv sync`), so budget a few minutes on a typical connection. The Input pane is on screen right away, with the Output pane showing a "Loading model (first run downloads ~5 GB)" spinner beside it. Anything you type or upload while the download runs is kept and applied once the model is ready — but the app can't redraw until then, so the image preview won't appear yet. Download progress prints in the terminal, not the browser. Later runs load from the local Hugging Face cache in seconds. Press Ctrl-C in the terminal to stop the app.
+**First run** downloads the ~5 GB model (on top of the Python dependencies pulled during `uv sync`), so budget a few minutes on a typical connection. The whole interface — inputs, action buttons, and both output panes — is on screen right away, with a "Loading model (first run downloads ~5 GB)" spinner sitting where results will appear. Anything you type or upload while the download runs is kept and applied once the model is ready, though the app can't redraw until then, so the image preview won't show yet. Download progress prints in the terminal, not the browser. Later runs load from the local Hugging Face cache in seconds. Press Ctrl-C in the terminal to stop the app.
 
 ## Modes
 
@@ -91,7 +91,7 @@ Exact values vary with the model; fields it can't fill come back `null` (here th
 
 - **`command not found: uv`** — install uv (see [Quickstart](#quickstart)), then restart your shell.
 - **Not on Apple Silicon** — MLX runs only on Apple-Silicon Macs (M1–M4). On Intel Macs, Linux, or Windows the model will fail to load and there is no CPU/CUDA fallback. Use the [hosted HF Space](https://huggingface.co/spaces/numind/NuExtract3) instead.
-- **First run looks stuck / Output pane spins** — it's downloading the ~5 GB model; watch progress in the terminal, not the browser. The Input pane is already on screen meanwhile. Interrupted downloads resume on the next run (Hugging Face caches partial files).
+- **First run looks stuck / Result pane spins** — it's downloading the ~5 GB model; watch progress in the terminal, not the browser. The rest of the interface is already on screen meanwhile. Interrupted downloads resume on the next run (Hugging Face caches partial files).
 - **"Model failed to load"** — the error is shown in the Output pane with a **Retry model load** button. The failure is cached deliberately, so it won't retry itself on every click elsewhere in the app; use the button once you've fixed the cause.
 - **Out of memory or very slow generation** — the 8-bit model needs ~5–6 GB of unified memory plus KV cache. On 16 GB machines, close other apps, lower **Max tokens**, and keep inputs shorter.
 - **`Qwen3VLImageProcessor` / transformers errors** — dependency versions are pinned in `pyproject.toml` (notably `transformers==5.15.0` and `torchvision`, both required even for text-only runs). Run `uv sync` to restore the locked versions and avoid upgrading these manually.
@@ -99,11 +99,13 @@ Exact values vary with the model; fields it can't fill come back `null` (here th
 ## Development
 
 ```bash
-uv run ruff check .      # Lint
-uv run ruff format .     # Format
-uv run ty check          # Type check
-uv run pytest            # Tests (95)
+uv run --frozen ruff check .      # Lint
+uv run --frozen ruff format .     # Format (add --check to verify without rewriting)
+uv run --frozen ty check          # Type check
+uv run --frozen pytest            # Tests (95)
 ```
+
+`--frozen` is not optional here. A bare `uv run` locks and syncs by default, so with an out-of-date `uv.lock` it silently rewrites the lock in your working tree — every gate then passes against the regenerated lock while the committed one stays stale, and CI's `uv sync --locked` fails on `main`.
 
 `uv run python scripts/probe_mlx_vlm.py` runs an end-to-end probe (downloads the model and performs a real extraction) to verify the setup on a fresh machine.
 
@@ -145,10 +147,10 @@ tests/
 Contributions are welcome. Before opening a PR against `main`, run the same gates CI enforces — all must pass:
 
 ```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run ty check
-uv run pytest
+uv run --frozen ruff check .
+uv run --frozen ruff format --check .
+uv run --frozen ty check
+uv run --frozen pytest
 ```
 
 Add or update tests where practical; the suite mocks the model so it runs fast and needs no network (currently 95 tests). Enabling `git config core.hooksPath .githooks` runs all four of these gates, plus `uv lock --check`, automatically before each push. See [CLAUDE.md](CLAUDE.md) for an architecture overview.

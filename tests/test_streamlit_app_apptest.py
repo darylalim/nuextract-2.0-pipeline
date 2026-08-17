@@ -151,36 +151,46 @@ def test_no_warnings_or_errors_on_initial_load(at):
     assert len(at.warning) == 0
 
 
-def test_model_loads_after_the_input_widgets_render(monkeypatch, cold_model_cache):
-    """The model load must sit below the *whole* left column, not above st.columns.
+def test_model_loads_after_the_page_chrome_renders(monkeypatch, cold_model_cache):
+    """The ~5 GB load must run below *everything* that doesn't depend on it.
 
-    Streamlit emits a UI delta per st.* call, so a blocking load placed above
-    the columns stops every input widget from painting until the ~5 GB download
-    finishes. Asserted structurally rather than by timing: keyed widgets
-    register themselves in session_state as they render, so the anchor key is
-    present when load_model is called if and only if that widget already ran.
+    Streamlit emits a UI delta per st.* call, so a blocking load stops every
+    element after it from painting until it returns. Nothing but an actual
+    generation needs the model, so both the left column's inputs and the right
+    column's own chrome (action buttons, pane headers) must render first.
 
-    The anchor is reasoning_checkbox — the *last* keyed widget in col_left — and
-    that choice is the whole point. An earlier anchor (template_input is only
-    the 3rd of 7) leaves the load free to sit mid-column with the instructions
-    field, both sliders and the checkbox still stuck behind the download, and
-    the test would still pass.
+    Asserted structurally rather than by timing, since render order is not
+    observable from AppTest: keyed widgets register themselves in session_state
+    as they render, so an anchor key is present when load_model is called if
+    and only if that widget already ran.
+
+    Both anchors are the *last* keyed widget of their group, and that is the
+    whole point — an anchor further up still passes with the load sitting in
+    the middle of the group it is supposed to be guarding. reasoning_checkbox
+    is the last of col_left's 7 inputs (template_input, the 3rd, would let the
+    load sit mid-column); template_button is the last of the three action
+    buttons.
     """
     seen: dict = {}
 
     def record() -> None:
-        seen["inputs_rendered_first"] = "reasoning_checkbox" in st.session_state
+        seen["inputs"] = "reasoning_checkbox" in st.session_state
+        seen["chrome"] = "template_button" in st.session_state
 
     _stub_model_loading(monkeypatch, on_load=record)
 
     at = AppTest.from_file(APP_PATH)
     at.run()
 
-    # Without this, a crash anywhere in col_left leaves `seen` empty and the
-    # ordering assertion below fails with a message blaming the wrong thing.
+    # Without this, a crash before either anchor leaves `seen` empty and the
+    # assertions below fail with a message blaming the wrong thing.
     assert not at.exception
-    assert seen.get("inputs_rendered_first") is True, (
+    assert seen.get("inputs") is True, (
         "get_model() ran before the left column finished — move it below col_left"
+    )
+    assert seen.get("chrome") is True, (
+        "get_model() ran before the action buttons rendered — move it below them "
+        "inside _output_section"
     )
 
 
