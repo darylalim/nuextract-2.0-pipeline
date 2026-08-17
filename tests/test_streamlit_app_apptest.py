@@ -358,12 +358,36 @@ def test_reasoning_enabled_splits_reasoning_and_output_panes(at, stream_captor):
     at.button(key="extract_button").click()
     at.run()
 
-    # Anchor on the ```text fence to confirm we're matching the reasoning pane,
-    # not some other markdown element that happens to contain the trace text.
-    assert any(
-        "```text" in m.value and "thinking step by step" in m.value for m in at.markdown
-    )
-    assert any('"k": 1' in c.value for c in at.code)
+    # Both panes render as code elements now, so match on their distinct
+    # contents and assert they landed in *different* elements — that is what
+    # proves the trace did not leak into the result pane, or vice versa.
+    trace = [c.value for c in at.code if "thinking step by step" in c.value]
+    result = [c.value for c in at.code if '"k": 1' in c.value]
+    assert len(trace) == 1
+    assert len(result) == 1
+    assert trace[0] != result[0]
+
+
+def test_reasoning_trace_containing_a_code_fence_stays_in_one_element(
+    at, stream_captor
+):
+    """A fence inside the trace used to close the hand-built ```text wrapper and
+    hand everything after it to the Markdown renderer. st.code takes the body as
+    a value, so the whole trace — inner fence and all — stays in one element."""
+    _, set_chunks = stream_captor
+    trace = 'converting to markdown:\n```json\n{"a": 1}\n```\ndone'
+    set_chunks(f'{trace}</think>{{"k": 2}}')
+
+    at.text_area(key="text_input").set_value("doc text")
+    at.checkbox(key="reasoning_checkbox").check()
+    at.button(key="extract_button").click()
+    at.run()
+
+    holding = [c.value for c in at.code if "converting to markdown" in c.value]
+    assert len(holding) == 1
+    # Nothing after the inner fence escaped into a separate rendered element.
+    assert "```json" in holding[0]
+    assert holding[0].endswith("done")
 
 
 def test_extract_passes_instructions_to_stream_extract(at, stream_captor):
