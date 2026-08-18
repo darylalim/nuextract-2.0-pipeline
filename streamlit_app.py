@@ -179,20 +179,31 @@ _DOWNLOAD_CONFIGS = {
 }
 
 
-def _render_download_button(
-    placeholder: Any, accumulated: str, *, download_kind: str, reasoning: bool
-) -> None:
-    """Render a download button with content cleaned of reasoning trace + wrappers."""
+def _download_payload(accumulated: str, *, download_kind: str, reasoning: bool) -> str:
+    """The exact text a download would write: reasoning trace and wrappers gone.
+
+    This is also the only honest test for "did the run produce anything?".
+    `accumulated` still holds the trace and any `<answer>` wrapper, so it is
+    non-empty for runs that produced no answer at all — see the guard in
+    `_run_mode`.
+    """
     _, output = split_reasoning_and_output(accumulated, reasoning)
-    label, file_name, mime, is_json = _DOWNLOAD_CONFIGS[download_kind]
-    data = extract_answer_block(output) if is_json else output
+    is_json = _DOWNLOAD_CONFIGS[download_kind][3]
+    return extract_answer_block(output) if is_json else output
+
+
+def _render_download_button(
+    placeholder: Any, payload: str, *, download_kind: str
+) -> None:
+    """Render a download button for an already-cleaned `_download_payload`."""
+    label, file_name, mime, _ = _DOWNLOAD_CONFIGS[download_kind]
     with placeholder.container():
         # on_click="ignore" keeps the download client-side so clicking it does
         # not rerun the _output_section fragment — a rerun would repaint the idle
         # hint over the result and drop this button (no generate button is active).
         st.download_button(
             label,
-            data=data,
+            data=payload,
             file_name=file_name,
             mime=mime,
             on_click="ignore",
@@ -251,8 +262,26 @@ def _run_mode(
             output_placeholder.error(f"{type(e).__name__}: {e}")
             return
 
-    if not accumulated.strip():
-        output_placeholder.warning("Empty output from model.")
+    # Guard on the payload a download would actually write, never on `accumulated`:
+    # the raw text still carries the reasoning trace and any <answer> wrapper, so
+    # two runs that produced no answer at all are non-empty there — a budget spent
+    # entirely inside <think> (</think> never arrives), and a closed but empty
+    # <answer></answer>. Both used to slip past this guard and end with a stale
+    # mid-stream caption as the terminal state, or a blanked pane, and an
+    # empty-payload download button beside it.
+    payload = _download_payload(
+        accumulated, download_kind=download_kind, reasoning=reasoning
+    )
+    if not payload.strip():
+        think, output = split_reasoning_and_output(accumulated, reasoning)
+        if think and not output:
+            # Actionable: the run did work, it just never got to an answer.
+            output_placeholder.warning(
+                "The model spent its whole token budget reasoning and never "
+                "reached an answer. Raise Max tokens, or turn Reasoning off."
+            )
+        else:
+            output_placeholder.warning("Empty output from model.")
         return
 
     # The stream is complete, so the text finally satisfies extract_answer_block's
@@ -271,12 +300,7 @@ def _run_mode(
             final=True,
         )
 
-    _render_download_button(
-        download_placeholder,
-        accumulated,
-        download_kind=download_kind,
-        reasoning=reasoning,
-    )
+    _render_download_button(download_placeholder, payload, download_kind=download_kind)
 
 
 @st.fragment

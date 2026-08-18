@@ -434,9 +434,12 @@ def test_render_download_button_extract_mode_emits_clean_json(app):
         # The model's raw output may include <answer>...</answer> wrappers
         app._render_download_button(
             MagicMock(),
-            '<answer>{"name": "Alice"}</answer>',
+            app._download_payload(
+                '<answer>{"name": "Alice"}</answer>',
+                download_kind="extract",
+                reasoning=False,
+            ),
             download_kind="extract",
-            reasoning=False,
         )
     mock_dl.assert_called_once()
     call = mock_dl.call_args
@@ -455,9 +458,10 @@ def test_render_download_button_markdown_mode_keeps_raw_output(app):
     with patch.object(st, "download_button") as mock_dl:
         app._render_download_button(
             MagicMock(),
-            "# Heading\n\nbody text",
+            app._download_payload(
+                "# Heading\n\nbody text", download_kind="markdown", reasoning=False
+            ),
             download_kind="markdown",
-            reasoning=False,
         )
     call = mock_dl.call_args
     assert call.args[0] == "Download Markdown"
@@ -473,9 +477,10 @@ def test_render_download_button_template_mode_treats_as_json(app):
     with patch.object(st, "download_button") as mock_dl:
         app._render_download_button(
             MagicMock(),
-            '{"field": "string"}',
+            app._download_payload(
+                '{"field": "string"}', download_kind="template", reasoning=False
+            ),
             download_kind="template",
-            reasoning=False,
         )
     call = mock_dl.call_args
     assert call.args[0] == "Download template"
@@ -491,8 +496,11 @@ def test_render_download_button_strips_reasoning_trace(app):
     with patch.object(st, "download_button") as mock_dl:
         app._render_download_button(
             MagicMock(),
-            'reasoning text...</think>{"name": "Bob"}',
+            app._download_payload(
+                'reasoning text...</think>{"name": "Bob"}',
+                download_kind="extract",
+                reasoning=True,
+            ),
             download_kind="extract",
-            reasoning=True,
         )
     assert mock_dl.call_args.kwargs["data"] == '{"name": "Bob"}'
