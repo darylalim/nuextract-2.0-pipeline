@@ -138,7 +138,14 @@ def _render_output_pane(
             # st.code, not a hand-built ```text fence: `think` is untrusted model
             # output, and a fence inside it would close ours and hand the rest to
             # the Markdown renderer. Markdown-mode reasoning quotes fences often.
-            reasoning_placeholder.code(think, language=None, wrap_lines=True)
+            # Fixed height so the trace scrolls in place instead of growing the
+            # page: the Result pane and its download button sit *below* this, and
+            # an uncapped trace pushes them off-screen for the whole run while the
+            # scroll target keeps moving. An int height is what makes st.code
+            # scroll; "content" (the default) is what lets it grow.
+            reasoning_placeholder.code(
+                think, language=None, wrap_lines=True, height=300
+            )
         else:
             reasoning_placeholder.caption("_(no reasoning yet)_")
     else:
@@ -234,7 +241,7 @@ def _run_mode(
     """Drive a streamed generation for one mode and update the UI panes live."""
     is_structured = template is not None and mode is None
     render_as_json = is_structured or mode == MODE_TEMPLATE_GENERATION
-    with st.spinner(f"{mode_label}..."):
+    with st.spinner(f"{mode_label}...", show_time=True):
         accumulated = ""
         try:
             for chunk in stream_extract(
@@ -322,6 +329,7 @@ def _output_section() -> None:
     with st.container(horizontal=True):
         btn_extract = st.button(
             "Extract JSON",
+            help="Needs a valid JSON template, plus an image or text.",
             type="primary",
             icon=":material/data_object:",
             width="stretch",
@@ -329,12 +337,14 @@ def _output_section() -> None:
         )
         btn_markdown = st.button(
             "Convert to Markdown",
+            help="Needs an image of the document.",
             icon=":material/article:",
             width="stretch",
             key="markdown_button",
         )
         btn_template = st.button(
             "Generate template",
+            help="Needs an image or text to describe the document.",
             icon=":material/auto_awesome:",
             width="stretch",
             key="template_button",
@@ -351,14 +361,18 @@ def _output_section() -> None:
     # emits a UI delta per st.* call, so only what follows this line waits on
     # it. The wait shows inside the Result slot, where the output will land.
     with output_placeholder.container():
-        with st.spinner("Loading model (first run downloads ~5 GB)..."):
+        with st.spinner("Loading model (first run downloads ~5 GB)...", show_time=True):
             loaded = get_model()
     if isinstance(loaded, Exception):
         with output_placeholder.container():
             st.error(f"Model failed to load — {type(loaded).__name__}: {loaded}")
             # Cached failure (see get_model): retrying is an explicit click,
             # not something every widget interaction re-triggers.
-            if st.button("Retry model load", icon=":material/refresh:"):
+            if st.button(
+                "Retry model load",
+                icon=":material/refresh:",
+                key="retry_model_load_button",
+            ):
                 get_model.clear()
                 st.rerun()
         return
@@ -368,6 +382,11 @@ def _output_section() -> None:
     # Result pane from being blank on first load, without lingering over the
     # spinner during generation or repainting after an output-less rerun.
     if not (btn_extract or btn_markdown or btn_template):
+        # Both panes get a hint, not just Result: reasoning_placeholder is only
+        # ever written from _render_output_pane, so before the first run the bold
+        # "Reasoning" header renders over an unwritten st.empty() of zero height
+        # — the same void the mid-run "(reasoning disabled)" caption prevents.
+        reasoning_placeholder.caption("_(no run yet)_")
         output_placeholder.caption("Choose an action above to generate output.")
 
     # Inputs live in the left column (outside this fragment); read their current
@@ -490,7 +509,9 @@ with col_left:
         "Describe each field with a type hint, e.g. string, number, or YYYY-MM-DD."
     )
     st.text_area(
-        "Template",
+        # Collapsed, but still the widget's accessible name — so it has to match
+        # the "Template (JSON)" heading a sighted user reads above it.
+        "Template (JSON)",
         value=DEFAULT_TEMPLATE,
         height=320,
         label_visibility="collapsed",
@@ -498,8 +519,14 @@ with col_left:
     )
 
     st.text_area(
+        # 98 is the floor Streamlit enforces for a visible label, not a chosen
+        # size: the 80 that used to sit here was silently clamped up to it, so the
+        # number read as intent while doing nothing. Stating the floor keeps the
+        # rendering identical and makes the constraint visible. Dropping the
+        # parameter instead would take the default — three lines, i.e. *taller*
+        # than the Text box above — inverting the intent this field was written with.
         "Instructions (optional)",
-        height=80,
+        height=98,
         placeholder="Extra guidance for the model, e.g. 'use British date format'.",
         key="instructions_input",
     )
@@ -530,7 +557,11 @@ with col_left:
     st.checkbox(
         "Reasoning",
         value=False,
-        help="Show the model's `<think>` trace in the Reasoning pane.",
+        help=(
+            "Show the model's `<think>` trace in the Reasoning pane. Ignored by "
+            "**Generate template** — the model's template only permits reasoning "
+            "for extraction and Markdown."
+        ),
         key="reasoning_checkbox",
     )
 
