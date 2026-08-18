@@ -84,6 +84,7 @@ Exact values vary with the model; fields it can't fill come back `null` (here th
 
 - **No PDF support** — matches the upstream HF Space. Convert PDFs to images (PNG/JPG) externally before uploading.
 - **One image per run** — the uploader takes a single image (JPG, JPEG, PNG, or WEBP); it does not batch multiple pages.
+- **25 MB per image** — a browser-side bound on the uploader, sized for a single page scan. It is a widget hint, not a server-enforced limit.
 - **No clipboard paste** — images must be uploaded as files (a Streamlit limitation vs the Gradio-based HF Space).
 - **Apple Silicon only** — inference runs through MLX, which requires an arm64 Mac.
 
@@ -102,7 +103,7 @@ Exact values vary with the model; fields it can't fill come back `null` (here th
 uv run --frozen ruff check .      # Lint
 uv run --frozen ruff format .     # Format (add --check to verify without rewriting)
 uv run --frozen ty check          # Type check
-uv run --frozen pytest            # Tests (103)
+uv run --frozen pytest            # Tests (106)
 ```
 
 `--frozen` is not optional here. A bare `uv run` locks and syncs by default, so with an out-of-date `uv.lock` it silently rewrites the lock in your working tree — every gate then passes against the regenerated lock while the committed one stays stale, and CI's `uv sync --locked` fails on `main`.
@@ -132,8 +133,8 @@ scripts/
 tests/
   conftest.py                       # sys.path setup + guard: no test may load a real model
   test_nuextract.py                 # Wrapper tests (44)
-  test_streamlit_app.py             # App helper tests (28)
-  test_streamlit_app_apptest.py     # End-to-end UI tests via Streamlit AppTest (31)
+  test_streamlit_app.py             # App helper tests (29)
+  test_streamlit_app_apptest.py     # End-to-end UI tests via Streamlit AppTest (33)
 .githooks/
   pre-push                          # Runs uv lock --check + all four gates before a push
                                     # (opt-in: git config core.hooksPath .githooks)
@@ -153,7 +154,7 @@ uv run --frozen ty check
 uv run --frozen pytest
 ```
 
-Add or update tests where practical; the suite mocks the model so it runs fast and needs no network (currently 103 tests). Enabling `git config core.hooksPath .githooks` runs all four of these gates, plus `uv lock --check`, automatically before each push. See [CLAUDE.md](CLAUDE.md) for an architecture overview.
+Add or update tests where practical; the suite mocks the model so it runs fast and needs no network (currently 106 tests). Enabling `git config core.hooksPath .githooks` runs all four of these gates, plus `uv lock --check`, automatically before each push. See [CLAUDE.md](CLAUDE.md) for an architecture overview.
 
 ## Acknowledgments
 
