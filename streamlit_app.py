@@ -62,6 +62,9 @@ def get_model() -> tuple[Any, Any] | Exception:
         return exc
 
 
+# Megabytes; see the file_uploader call that passes it.
+_MAX_IMAGE_UPLOAD_MB = 25
+
 _IMG_PATH_KEY = "_uploaded_image_path"
 _IMG_ID_KEY = "_uploaded_image_id"
 
@@ -365,7 +368,20 @@ def _output_section() -> None:
             loaded = get_model()
     if isinstance(loaded, Exception):
         with output_placeholder.container():
-            st.error(f"Model failed to load — {type(loaded).__name__}: {loaded}")
+            st.error(f"Model failed to load — {type(loaded).__name__}")
+            # Message through st.code, not st.error: st.error renders its body as
+            # GitHub-flavored Markdown with soft breaks disabled, so the
+            # multi-line messages this path actually produces (an offline hub
+            # download, an unpatched processor_config.json) collapse onto one
+            # line. st.code also keeps untrusted text out of the Markdown
+            # renderer, the same reason the reasoning trace uses it.
+            st.code(str(loaded) or repr(loaded), language=None, wrap_lines=True)
+            # get_model returns the exception instead of raising it, so Streamlit
+            # never reports it and nothing logs it — this expander is the only
+            # place the frame that names the cause survives. Collapsed by
+            # default: the headline is enough unless you are debugging.
+            with st.expander("Traceback", icon=":material/bug_report:"):
+                st.exception(loaded)
             # Cached failure (see get_model): retrying is an explicit click,
             # not something every widget interaction re-triggers.
             if st.button(
@@ -489,6 +505,12 @@ with col_left:
         "Image",
         type=["jpg", "jpeg", "png", "webp"],
         help="JPG, PNG, or WEBP image of the document.",
+        # One document page, in megabytes. Without this the widget inherits
+        # server.maxUploadSize (200 MB), and _save_uploaded_image reads whatever
+        # arrives whole into memory via getvalue() before the image processor
+        # decodes it to raw pixels — on the same unified memory already holding a
+        # ~5 GB model. Generous for a 300dpi page scan, cheap insurance otherwise.
+        max_upload_size=_MAX_IMAGE_UPLOAD_MB,
         key="image_input",
     )
     if uploaded_image is not None:
