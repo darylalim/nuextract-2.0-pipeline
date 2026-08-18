@@ -308,6 +308,42 @@ def test_extract_empty_stream_shows_warning(at, stream_captor):
     assert any("Empty output" in w.value for w in at.warning)
 
 
+def test_reasoning_that_never_closes_warns_instead_of_stalling(at, stream_captor):
+    """Reasoning on, token budget spent before </think> ever arrives.
+
+    `accumulated` is non-empty here, so guarding on it let the run finish with
+    the mid-stream "waiting for output" caption as its terminal state and an
+    empty-payload download button beside it. The warning must be the actionable
+    one, since the remedy is a slider away.
+    """
+    _, set_chunks = stream_captor
+    set_chunks("still reasoning about the document, no answer yet")
+
+    at.text_area(key="text_input").set_value("doc text")
+    at.checkbox(key="reasoning_checkbox").check()
+    at.button(key="extract_button").click()
+    at.run()
+
+    assert any("Max tokens" in w.value for w in at.warning)
+    assert len(at.download_button) == 0
+    assert not any("waiting for output" in c.value for c in at.caption)
+
+
+def test_empty_answer_wrapper_warns_instead_of_blanking_the_pane(at, stream_captor):
+    """A closed but empty <answer></answer> cleans to an empty payload while
+    `accumulated` stays non-empty, so the old guard let the final render blank
+    the Result pane and still offer a download of nothing."""
+    _, set_chunks = stream_captor
+    set_chunks("<answer></answer>")
+
+    at.text_area(key="text_input").set_value("doc text")
+    at.button(key="extract_button").click()
+    at.run()
+
+    assert any("Empty output" in w.value for w in at.warning)
+    assert len(at.download_button) == 0
+
+
 def test_extract_exception_during_stream_shows_error(at, monkeypatch):
     """Model errors mid-stream surface in the output pane, not as a crash.
 
