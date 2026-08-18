@@ -346,7 +346,7 @@ def test_reasoning_that_never_closes_warns_instead_of_stalling(at, stream_captor
     set_chunks("still reasoning about the document, no answer yet")
 
     at.text_area(key="text_input").set_value("doc text")
-    at.checkbox(key="reasoning_checkbox").check()
+    at.toggle(key="reasoning_checkbox").set_value(True)
     at.button(key="extract_button").click()
     at.run()
 
@@ -416,7 +416,7 @@ def test_reasoning_enabled_splits_reasoning_and_output_panes(at, stream_captor):
     set_chunks('thinking step by step</think>{"k": 1}')
 
     at.text_area(key="text_input").set_value("doc text")
-    at.checkbox(key="reasoning_checkbox").check()
+    at.toggle(key="reasoning_checkbox").set_value(True)
     at.button(key="extract_button").click()
     at.run()
 
@@ -457,7 +457,7 @@ def test_reasoning_trace_containing_a_code_fence_stays_in_one_element(
     set_chunks(f'{trace}</think>{{"k": 2}}')
 
     at.text_area(key="text_input").set_value("doc text")
-    at.checkbox(key="reasoning_checkbox").check()
+    at.toggle(key="reasoning_checkbox").set_value(True)
     at.button(key="extract_button").click()
     at.run()
 
@@ -499,14 +499,14 @@ def test_template_gen_passes_system_prompt(at, stream_captor):
 
 
 def test_template_gen_forces_reasoning_off(at, stream_captor):
-    """Template-gen overrides the reasoning checkbox: enable_thinking is always
+    """Template-gen overrides the reasoning toggle: enable_thinking is always
     False even when the user has reasoning on (the Jinja only allows thinking
     for structured/content modes)."""
     captured, set_chunks = stream_captor
     set_chunks('{"field_a": "string"}')
 
     at.text_area(key="text_input").set_value("describe a document")
-    at.checkbox(key="reasoning_checkbox").check()
+    at.toggle(key="reasoning_checkbox").set_value(True)
     at.button(key="template_button").click()
     at.run()
 

@@ -558,7 +558,14 @@ with col_left:
         key="image_input",
     )
     if uploaded_image is not None:
-        st.image(uploaded_image, width="stretch")
+        # Bounded height, because the input this app is built for is a document
+        # page: a portrait scan is ~1.4x taller than this column is wide, so an
+        # unbounded preview pushes the template editor and both sliders below the
+        # fold the moment an image is attached — exactly when you want to edit
+        # them. st.image has no height parameter, so the container caps it and
+        # scrolls.
+        with st.container(height=320):
+            st.image(uploaded_image, width="stretch")
 
     # Keyed inputs feed session_state; the _output_section fragment reads their
     # values by key rather than capturing the return values here.
@@ -620,7 +627,12 @@ with col_left:
         )
     # Own full-width line so the "Reasoning" label never wraps (it did when
     # squeezed into a narrow middle column alongside the two sliders).
-    st.checkbox(
+    # st.toggle, not st.checkbox: this is an app setting that changes how a run
+    # behaves, and the bundled selection-widgets.md for this pin reserves the
+    # checkbox for forms. The key keeps its original name — it is the anchor
+    # test_model_loads_after_the_page_chrome_renders asserts on, and churning a
+    # load-bearing identifier for cosmetics is not worth it.
+    st.toggle(
         "Reasoning",
         value=False,
         help=(

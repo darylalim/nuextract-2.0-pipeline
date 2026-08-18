@@ -37,7 +37,7 @@ def app():
         stack.enter_context(patch.object(st, "file_uploader", return_value=None))
         stack.enter_context(patch.object(st, "text_area", return_value=""))
         stack.enter_context(patch.object(st, "slider", return_value=0.0))
-        stack.enter_context(patch.object(st, "checkbox", return_value=False))
+        stack.enter_context(patch.object(st, "toggle", return_value=False))
         stack.enter_context(patch.object(st, "button", return_value=False))
         # side_effect, not return_value: _output_section calls st.empty() three
         # times (reasoning, output, download panes). A single return_value hands
