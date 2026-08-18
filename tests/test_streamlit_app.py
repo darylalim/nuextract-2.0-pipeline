@@ -37,7 +37,7 @@ def app():
         stack.enter_context(patch.object(st, "file_uploader", return_value=None))
         stack.enter_context(patch.object(st, "text_area", return_value=""))
         stack.enter_context(patch.object(st, "slider", return_value=0.0))
-        stack.enter_context(patch.object(st, "checkbox", return_value=False))
+        stack.enter_context(patch.object(st, "toggle", return_value=False))
         stack.enter_context(patch.object(st, "button", return_value=False))
         # side_effect, not return_value: _output_section calls st.empty() three
         # times (reasoning, output, download panes). A single return_value hands
@@ -325,8 +325,11 @@ def test_render_output_pane_reasoning_completed_populates_both_panes(app):
     )
     # Reasoning text in reasoning_placeholder, as a code block rather than a
     # hand-built markdown fence the trace itself could break out of.
-    reasoning_ph.code.assert_called_once()
-    assert "reasoning text here" in reasoning_ph.code.call_args[0][0]
+    # The trace lands in a fixed-height autoscroll container, so the code element
+    # is created on that container rather than on the placeholder itself.
+    trace_box = reasoning_ph.container.return_value
+    trace_box.code.assert_called_once()
+    assert "reasoning text here" in trace_box.code.call_args[0][0]
     # JSON answer in output_placeholder
     output_ph.code.assert_called_once()
     assert "1" in output_ph.code.call_args[0][0]
@@ -404,6 +407,27 @@ def test_render_output_pane_final_extracts_answer_and_pretty_prints(app):
     rendered = output_ph.code.call_args[0][0]
     assert "<answer>" not in rendered
     assert rendered == '{\n  "k": 1\n}'
+
+
+def test_reasoning_trace_is_height_capped_and_tail_follows(app):
+    """The trace scrolls in place *and* follows its own tail.
+
+    Both halves matter and neither is visible to an output assertion. Without a
+    fixed height the pane grows for the whole run and pushes the Result pane and
+    its download button off-screen; with a fixed height but no autoscroll the
+    viewport pins to the top of the trace instead, and since this element is
+    re-created on every chunk the newest tokens stream in below the fold and any
+    manual scroll is undone by the next one.
+    """
+    reasoning_ph = MagicMock()
+    app._render_output_pane(
+        MagicMock(),
+        reasoning_ph,
+        accumulated='trace text</think>{"k": 1}',
+        reasoning_enabled=True,
+        is_structured=True,
+    )
+    reasoning_ph.container.assert_called_once_with(height=300, autoscroll=True)
 
 
 def test_render_output_pane_reasoning_disabled_caption(app):

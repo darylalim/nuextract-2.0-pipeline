@@ -214,6 +214,32 @@ def test_idle_hint_cleared_after_run(at, stream_captor):
     assert any('"k": 1' in c.value for c in at.code)
 
 
+def test_completed_run_survives_a_left_column_edit(at, stream_captor):
+    """A finished result outlives a full rerun.
+
+    The input widgets sit outside the fragment, so touching one re-runs the whole
+    script: the three placeholders are re-created empty with none of the generate
+    buttons pressed. That used to repaint the idle hint over a result that cost a
+    full local generation, and drop its download button with it.
+    """
+    _, set_chunks = stream_captor
+    set_chunks('{"k": 1}')
+
+    at.text_area(key="text_input").set_value("doc text")
+    at.button(key="extract_button").click()
+    at.run()
+    assert any('"k": 1' in c.value for c in at.code)
+    assert len(at.download_button) == 1
+
+    # A left-column widget, so this is a full rerun and no button is pressed.
+    at.slider(key="temperature_slider").set_value(0.5)
+    at.run()
+
+    assert any('"k": 1' in c.value for c in at.code)
+    assert len(at.download_button) == 1
+    assert not any("Choose an action" in c.value for c in at.caption)
+
+
 # --- Extract button validation ---
 
 
@@ -320,7 +346,7 @@ def test_reasoning_that_never_closes_warns_instead_of_stalling(at, stream_captor
     set_chunks("still reasoning about the document, no answer yet")
 
     at.text_area(key="text_input").set_value("doc text")
-    at.checkbox(key="reasoning_checkbox").check()
+    at.toggle(key="reasoning_checkbox").set_value(True)
     at.button(key="extract_button").click()
     at.run()
 
@@ -367,6 +393,58 @@ def test_extract_exception_during_stream_shows_error(at, monkeypatch):
     )
 
 
+def test_failed_run_does_not_replay_the_previous_result(at, monkeypatch):
+    """A failed run supersedes the stored one.
+
+    Storing only on success is not enough: the *previous* run stays stored, so
+    the next full rerun replays it — with a live download button — over the error
+    from the run that actually just happened, presenting stale output as current.
+    """
+
+    def ok_stream(*_, **__):
+        yield '{"good": 1}'
+
+    monkeypatch.setattr("nuextract.stream_extract", ok_stream)
+    at.text_area(key="text_input").set_value("doc text")
+    at.button(key="extract_button").click()
+    at.run()
+    assert any('"good": 1' in c.value for c in at.code)
+    assert len(at.download_button) == 1
+
+    def boom(*_, **__):
+        raise RuntimeError("model crashed mid-stream")
+        yield  # unreachable; makes this a generator
+
+    monkeypatch.setattr("nuextract.stream_extract", boom)
+    at.button(key="extract_button").click()
+    at.run()
+    assert any("model crashed" in e.value for e in at.error)
+    assert not at.download_button
+
+    # A left-column widget: a full rerun with no button pressed, i.e. the replay
+    # path. The crashed run left nothing to replay, so nothing may come back.
+    at.slider(key="temperature_slider").set_value(0.5)
+    at.run()
+
+    assert not any('"good": 1' in c.value for c in at.code)
+    assert not at.download_button
+    assert any("Choose an action" in c.value for c in at.caption)
+
+
+def test_validation_failure_leaves_the_reasoning_pane_captioned(at):
+    """A validation failure still fills both panes.
+
+    The idle branch is skipped whenever a button fired, so a warning-only run
+    used to leave the bold "Reasoning" header over an unwritten placeholder —
+    the void the caption exists to remove — on the most likely first interaction.
+    """
+    at.button(key="extract_button").click()
+    at.run()
+
+    assert any("Provide an image" in w.value for w in at.warning)
+    assert any("no run yet" in c.value for c in at.caption)
+
+
 def test_extract_passes_slider_values_to_stream_extract(at, stream_captor):
     """Temperature and max_tokens sliders flow through to the streaming call."""
     captured, set_chunks = stream_captor
@@ -390,7 +468,7 @@ def test_reasoning_enabled_splits_reasoning_and_output_panes(at, stream_captor):
     set_chunks('thinking step by step</think>{"k": 1}')
 
     at.text_area(key="text_input").set_value("doc text")
-    at.checkbox(key="reasoning_checkbox").check()
+    at.toggle(key="reasoning_checkbox").set_value(True)
     at.button(key="extract_button").click()
     at.run()
 
@@ -431,7 +509,7 @@ def test_reasoning_trace_containing_a_code_fence_stays_in_one_element(
     set_chunks(f'{trace}</think>{{"k": 2}}')
 
     at.text_area(key="text_input").set_value("doc text")
-    at.checkbox(key="reasoning_checkbox").check()
+    at.toggle(key="reasoning_checkbox").set_value(True)
     at.button(key="extract_button").click()
     at.run()
 
@@ -473,14 +551,14 @@ def test_template_gen_passes_system_prompt(at, stream_captor):
 
 
 def test_template_gen_forces_reasoning_off(at, stream_captor):
-    """Template-gen overrides the reasoning checkbox: enable_thinking is always
+    """Template-gen overrides the reasoning toggle: enable_thinking is always
     False even when the user has reasoning on (the Jinja only allows thinking
     for structured/content modes)."""
     captured, set_chunks = stream_captor
     set_chunks('{"field_a": "string"}')
 
     at.text_area(key="text_input").set_value("describe a document")
-    at.checkbox(key="reasoning_checkbox").check()
+    at.toggle(key="reasoning_checkbox").set_value(True)
     at.button(key="template_button").click()
     at.run()
 

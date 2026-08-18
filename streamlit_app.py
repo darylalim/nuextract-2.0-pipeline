@@ -62,6 +62,20 @@ def get_model() -> tuple[Any, Any] | Exception:
         return exc
 
 
+# Megabytes; see the file_uploader call that passes it.
+_MAX_IMAGE_UPLOAD_MB = 25
+
+# The last completed run, replayed when a full rerun re-creates the output
+# placeholders with no generate button pressed.
+_LAST_RUN_KEY = "_last_run"
+_LAST_RUN_FIELDS = (
+    "accumulated",
+    "payload",
+    "download_kind",
+    "reasoning",
+    "render_as_json",
+)
+
 _IMG_PATH_KEY = "_uploaded_image_path"
 _IMG_ID_KEY = "_uploaded_image_id"
 
@@ -138,7 +152,18 @@ def _render_output_pane(
             # st.code, not a hand-built ```text fence: `think` is untrusted model
             # output, and a fence inside it would close ours and hand the rest to
             # the Markdown renderer. Markdown-mode reasoning quotes fences often.
-            reasoning_placeholder.code(think, language=None, wrap_lines=True)
+            # Fixed height on a *container*, not on st.code, and autoscroll=True.
+            # The pane has to scroll rather than grow, because the Result pane and
+            # its download button sit *below* it and an uncapped trace pushes them
+            # off-screen for the whole run. But st.code exposes no autoscroll, and
+            # this element is re-created on every chunk, so a bare
+            # st.code(height=...) pins the viewport to the *top* of the trace: the
+            # newest tokens stream in below the fold and any manual scroll is
+            # reset by the next chunk. That is worse than growing, where the newest
+            # text was at least always visible. A fixed-height container with
+            # autoscroll is the documented way to tail-follow.
+            trace_box = reasoning_placeholder.container(height=300, autoscroll=True)
+            trace_box.code(think, language=None, wrap_lines=True)
         else:
             reasoning_placeholder.caption("_(no reasoning yet)_")
     else:
@@ -212,6 +237,56 @@ def _render_download_button(
         )
 
 
+def _render_completed_run(
+    state: dict,
+    *,
+    output_placeholder: Any,
+    reasoning_placeholder: Any,
+    download_placeholder: Any,
+    streamed_live: bool = False,
+) -> None:
+    """Paint the terminal state of a finished run: both panes, then the download.
+
+    The single implementation behind both the just-finished path in `_run_mode`
+    and the replay in `_output_section`, so the two cannot drift about what a
+    completed run looks like — the hazard flagged for `render_as_json`.
+
+    `streamed_live` marks the call made straight after streaming, and is the one
+    place the mode asymmetry lives: there the panes already hold the last
+    streaming paint, and in markdown mode the final pass reproduces it byte for
+    byte, so repainting would re-send the largest document the app produces for
+    no visible change. A replay never qualifies — its placeholders were just
+    re-created empty, so there is nothing for the paint to be identical to.
+    """
+    if state["render_as_json"] or not streamed_live:
+        _render_output_pane(
+            output_placeholder,
+            reasoning_placeholder,
+            state["accumulated"],
+            reasoning_enabled=state["reasoning"],
+            is_structured=state["render_as_json"],
+            final=True,
+        )
+    _render_download_button(
+        download_placeholder, state["payload"], download_kind=state["download_kind"]
+    )
+
+
+def _stored_run() -> dict | None:
+    """The stored completed run, or None if nothing usable is stored.
+
+    Shape-checked rather than trusted: Streamlit re-runs an edited script in the
+    *same* session on hot reload, with session_state preserved, so a stored dict
+    outlives the code that wrote it. A bare subscript would turn adding or
+    renaming a field into a KeyError traceback in a live session — which is this
+    app's own development loop.
+    """
+    stored = st.session_state.get(_LAST_RUN_KEY)
+    if not isinstance(stored, dict) or any(f not in stored for f in _LAST_RUN_FIELDS):
+        return None
+    return stored
+
+
 def _run_mode(
     *,
     mode_label: str,
@@ -234,7 +309,7 @@ def _run_mode(
     """Drive a streamed generation for one mode and update the UI panes live."""
     is_structured = template is not None and mode is None
     render_as_json = is_structured or mode == MODE_TEMPLATE_GENERATION
-    with st.spinner(f"{mode_label}..."):
+    with st.spinner(f"{mode_label}...", show_time=True):
         accumulated = ""
         try:
             for chunk in stream_extract(
@@ -284,23 +359,26 @@ def _run_mode(
             output_placeholder.warning("Empty output from model.")
         return
 
-    # The stream is complete, so the text finally satisfies extract_answer_block's
-    # whole-document contract: render once more to strip any <answer> wrapper and
-    # pretty-print. Deliberately below the empty-output guard — above it, an
-    # empty run would repaint "(generating...)" over its own warning. Skipped for
-    # markdown mode, where this render is byte-identical to the last streaming one
-    # and would re-send a whole document — the largest one the app produces.
-    if render_as_json:
-        _render_output_pane(
-            output_placeholder,
-            reasoning_placeholder,
-            accumulated,
-            reasoning_enabled=reasoning,
-            is_structured=render_as_json,
-            final=True,
-        )
-
-    _render_download_button(download_placeholder, payload, download_kind=download_kind)
+    # One dict, stored and rendered through one renderer, so a later replay
+    # cannot disagree with what this run just painted. Built below the
+    # empty-payload guard, so a run that produced no answer never becomes a
+    # replayable "result", and it carries `payload` rather than re-deriving it —
+    # deriving it twice is how the guard and the button drift apart.
+    state = {
+        "accumulated": accumulated,
+        "payload": payload,
+        "download_kind": download_kind,
+        "reasoning": reasoning,
+        "render_as_json": render_as_json,
+    }
+    st.session_state[_LAST_RUN_KEY] = state
+    _render_completed_run(
+        state,
+        output_placeholder=output_placeholder,
+        reasoning_placeholder=reasoning_placeholder,
+        download_placeholder=download_placeholder,
+        streamed_live=True,
+    )
 
 
 @st.fragment
@@ -322,6 +400,7 @@ def _output_section() -> None:
     with st.container(horizontal=True):
         btn_extract = st.button(
             "Extract JSON",
+            help="Needs a valid JSON template, plus an image or text.",
             type="primary",
             icon=":material/data_object:",
             width="stretch",
@@ -329,12 +408,14 @@ def _output_section() -> None:
         )
         btn_markdown = st.button(
             "Convert to Markdown",
+            help="Needs an image of the document.",
             icon=":material/article:",
             width="stretch",
             key="markdown_button",
         )
         btn_template = st.button(
             "Generate template",
+            help="Needs an image or text to describe the document.",
             icon=":material/auto_awesome:",
             width="stretch",
             key="template_button",
@@ -342,6 +423,11 @@ def _output_section() -> None:
 
     st.markdown("**Reasoning**")
     reasoning_placeholder = st.empty()
+    # Painted at creation, not only on the idle path: every path that ends without
+    # a trace leaves this placeholder unwritten — a validation warning, an empty
+    # stream — and a bold header over an unwritten st.empty() renders as a void.
+    # Streaming, the replay and the reasoning-disabled caption all overwrite it.
+    reasoning_placeholder.caption("_(no run yet)_")
     st.markdown("**Result**")
     output_placeholder = st.empty()
     download_placeholder = st.empty()
@@ -351,14 +437,34 @@ def _output_section() -> None:
     # emits a UI delta per st.* call, so only what follows this line waits on
     # it. The wait shows inside the Result slot, where the output will land.
     with output_placeholder.container():
-        with st.spinner("Loading model (first run downloads ~5 GB)..."):
+        with st.spinner("Loading model (first run downloads ~5 GB)...", show_time=True):
             loaded = get_model()
     if isinstance(loaded, Exception):
         with output_placeholder.container():
-            st.error(f"Model failed to load — {type(loaded).__name__}: {loaded}")
+            st.error(f"Model failed to load — {type(loaded).__name__}")
+            # Message through st.code, not st.error: st.error renders its body as
+            # GitHub-flavored Markdown with soft breaks disabled, so the
+            # multi-line messages this path actually produces (an offline hub
+            # download, an unpatched processor_config.json) collapse onto one
+            # line. st.code also keeps untrusted text out of the Markdown
+            # renderer, the same reason the reasoning trace uses it.
+            st.code(str(loaded) or repr(loaded), language=None, wrap_lines=True)
+            # get_model returns the exception instead of raising it, so Streamlit
+            # never reports it and nothing logs it — this expander is the only
+            # place the frame that names the cause survives. Collapsed by
+            # default: the headline is enough unless you are debugging. Note this
+            # lands in AppTest's `at.exception` bucket, which this suite uses as
+            # its crash detector — a test for this branch must assert on
+            # `at.exception[0].message`, never `assert not at.exception`.
+            with st.expander("Traceback", icon=":material/bug_report:"):
+                st.exception(loaded)
             # Cached failure (see get_model): retrying is an explicit click,
             # not something every widget interaction re-triggers.
-            if st.button("Retry model load", icon=":material/refresh:"):
+            if st.button(
+                "Retry model load",
+                icon=":material/refresh:",
+                key="retry_model_load_button",
+            ):
                 get_model.clear()
                 st.rerun()
         return
@@ -367,8 +473,31 @@ def _output_section() -> None:
     # Idle hint, shown only when no generate button fired this run: keeps the
     # Result pane from being blank on first load, without lingering over the
     # spinner during generation or repainting after an output-less rerun.
-    if not (btn_extract or btn_markdown or btn_template):
-        output_placeholder.caption("Choose an action above to generate output.")
+    if btn_extract or btn_markdown or btn_template:
+        # A generate button supersedes any stored run: from here on the panes
+        # belong to *this* attempt. Without this, every failure path leaves the
+        # previous run stored — a stream exception, an empty payload, or a
+        # validation error that never reaches _run_mode — and the next full rerun
+        # replays it, with a live download button, over the error the user just
+        # got. That presents stale output as current, and across modes: a failed
+        # markdown run would resurrect an extract result under "Download JSON".
+        st.session_state.pop(_LAST_RUN_KEY, None)
+    else:
+        last_run = _stored_run()
+        if last_run is None:
+            # Nothing has run yet, so keep the Result pane from being blank.
+            output_placeholder.caption("Choose an action above to generate output.")
+        else:
+            # Replay rather than paint the idle hint over a result that cost a
+            # whole local generation: the left-column widgets sit outside this
+            # fragment, so touching any of them is a full rerun that re-creates
+            # all three placeholders empty with no button pressed.
+            _render_completed_run(
+                last_run,
+                output_placeholder=output_placeholder,
+                reasoning_placeholder=reasoning_placeholder,
+                download_placeholder=download_placeholder,
+            )
 
     # Inputs live in the left column (outside this fragment); read their current
     # values from session_state via their widget keys.
@@ -470,10 +599,28 @@ with col_left:
         "Image",
         type=["jpg", "jpeg", "png", "webp"],
         help="JPG, PNG, or WEBP image of the document.",
+        # A browser-side bound only, in megabytes. Streamlit's upload route
+        # enforces server.maxUploadSize and never reads this value, so this
+        # rejects an oversized file in the widget before it uploads rather than
+        # guaranteeing anything server-side. It does not bound decode memory
+        # either: a 1 MB flat-colour 10000x10000 PNG still expands to ~300 MB of
+        # pixels. Kept for the widget hint, which is the part users actually see —
+        # a real server-side bound would mean server.maxUploadSize in a
+        # .streamlit/config.toml this repo deliberately does not ship.
+        max_upload_size=_MAX_IMAGE_UPLOAD_MB,
         key="image_input",
     )
     if uploaded_image is not None:
-        st.image(uploaded_image, width="stretch")
+        # A fixed height, not a cap — there is no max-height container, and
+        # st.image has no height parameter. The input this app is built for is a
+        # document page: a portrait scan is ~1.4x taller than this column is wide,
+        # so without this it pushes the template editor and both sliders below the
+        # fold the moment an image is attached, exactly when you want to edit
+        # them. Tall images scroll inside the box; the cost is that anything
+        # shorter than 320px is padded. border=False is explicit because a
+        # fixed-height container draws one by default.
+        with st.container(height=320, border=False):
+            st.image(uploaded_image, width="stretch")
 
     # Keyed inputs feed session_state; the _output_section fragment reads their
     # values by key rather than capturing the return values here.
@@ -490,7 +637,9 @@ with col_left:
         "Describe each field with a type hint, e.g. string, number, or YYYY-MM-DD."
     )
     st.text_area(
-        "Template",
+        # Collapsed, but still the widget's accessible name — so it has to match
+        # the "Template (JSON)" heading a sighted user reads above it.
+        "Template (JSON)",
         value=DEFAULT_TEMPLATE,
         height=320,
         label_visibility="collapsed",
@@ -498,8 +647,14 @@ with col_left:
     )
 
     st.text_area(
+        # 98 is the floor Streamlit enforces for a visible label, not a chosen
+        # size: the 80 that used to sit here was silently clamped up to it, so the
+        # number read as intent while doing nothing. Stating the floor keeps the
+        # rendering identical and makes the constraint visible. Dropping the
+        # parameter instead would take the default — three lines, i.e. *taller*
+        # than the Text box above — inverting the intent this field was written with.
         "Instructions (optional)",
-        height=80,
+        height=98,
         placeholder="Extra guidance for the model, e.g. 'use British date format'.",
         key="instructions_input",
     )
@@ -527,10 +682,19 @@ with col_left:
         )
     # Own full-width line so the "Reasoning" label never wraps (it did when
     # squeezed into a narrow middle column alongside the two sliders).
-    st.checkbox(
+    # st.toggle, not st.checkbox: this is an app setting that changes how a run
+    # behaves, and the bundled selection-widgets.md for this pin reserves the
+    # checkbox for forms. The key keeps its original name — it is the anchor
+    # test_model_loads_after_the_page_chrome_renders asserts on, and churning a
+    # load-bearing identifier for cosmetics is not worth it.
+    st.toggle(
         "Reasoning",
         value=False,
-        help="Show the model's `<think>` trace in the Reasoning pane.",
+        help=(
+            "Show the model's `<think>` trace in the Reasoning pane. Ignored by "
+            "**Generate template** — the model's template only permits reasoning "
+            "for extraction and Markdown."
+        ),
         key="reasoning_checkbox",
     )
 
