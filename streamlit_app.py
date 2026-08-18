@@ -65,6 +65,10 @@ def get_model() -> tuple[Any, Any] | Exception:
 # Megabytes; see the file_uploader call that passes it.
 _MAX_IMAGE_UPLOAD_MB = 25
 
+# The last completed run, replayed when a full rerun re-creates the output
+# placeholders with no generate button pressed.
+_LAST_RUN_KEY = "_last_run"
+
 _IMG_PATH_KEY = "_uploaded_image_path"
 _IMG_ID_KEY = "_uploaded_image_id"
 
@@ -310,6 +314,22 @@ def _run_mode(
             final=True,
         )
 
+    # Remember the finished run so a *full* rerun can repaint it. Any left-column
+    # widget triggers one — those widgets sit outside this fragment — which
+    # re-creates all three placeholders empty with none of the generate buttons
+    # pressed, and would otherwise discard a result that cost a whole local
+    # generation. Stored below the empty-payload guard, so a run that never
+    # produced an answer can never come back as a replayable "result", and the
+    # payload is carried rather than re-derived: deriving it twice is how the
+    # guard and the button drift apart.
+    st.session_state[_LAST_RUN_KEY] = {
+        "accumulated": accumulated,
+        "payload": payload,
+        "download_kind": download_kind,
+        "reasoning": reasoning,
+        "render_as_json": render_as_json,
+    }
+
     _render_download_button(download_placeholder, payload, download_kind=download_kind)
 
 
@@ -398,12 +418,36 @@ def _output_section() -> None:
     # Result pane from being blank on first load, without lingering over the
     # spinner during generation or repainting after an output-less rerun.
     if not (btn_extract or btn_markdown or btn_template):
-        # Both panes get a hint, not just Result: reasoning_placeholder is only
-        # ever written from _render_output_pane, so before the first run the bold
-        # "Reasoning" header renders over an unwritten st.empty() of zero height
-        # — the same void the mid-run "(reasoning disabled)" caption prevents.
-        reasoning_placeholder.caption("_(no run yet)_")
-        output_placeholder.caption("Choose an action above to generate output.")
+        last_run = st.session_state.get(_LAST_RUN_KEY)
+        if last_run is None:
+            # Both panes get a hint, not just Result: reasoning_placeholder is
+            # only ever written from _render_output_pane, so before the first run
+            # the bold "Reasoning" header renders over an unwritten st.empty() of
+            # zero height — the same void the mid-run "(reasoning disabled)"
+            # caption prevents.
+            reasoning_placeholder.caption("_(no run yet)_")
+            output_placeholder.caption("Choose an action above to generate output.")
+        else:
+            # Replay the last completed run rather than painting the idle hint
+            # over it. `final=True` reproduces the terminal state exactly: this
+            # text is a whole document, so it satisfies extract_answer_block's
+            # contract — unlike a mid-stream chunk. Markdown mode gets the final
+            # pass here too; _run_mode skips it only because there the render is
+            # byte-identical to its last streaming one, which is not the case for
+            # a placeholder that has just been re-created empty.
+            _render_output_pane(
+                output_placeholder,
+                reasoning_placeholder,
+                last_run["accumulated"],
+                reasoning_enabled=last_run["reasoning"],
+                is_structured=last_run["render_as_json"],
+                final=True,
+            )
+            _render_download_button(
+                download_placeholder,
+                last_run["payload"],
+                download_kind=last_run["download_kind"],
+            )
 
     # Inputs live in the left column (outside this fragment); read their current
     # values from session_state via their widget keys.

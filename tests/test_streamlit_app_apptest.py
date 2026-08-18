@@ -214,6 +214,32 @@ def test_idle_hint_cleared_after_run(at, stream_captor):
     assert any('"k": 1' in c.value for c in at.code)
 
 
+def test_completed_run_survives_a_left_column_edit(at, stream_captor):
+    """A finished result outlives a full rerun.
+
+    The input widgets sit outside the fragment, so touching one re-runs the whole
+    script: the three placeholders are re-created empty with none of the generate
+    buttons pressed. That used to repaint the idle hint over a result that cost a
+    full local generation, and drop its download button with it.
+    """
+    _, set_chunks = stream_captor
+    set_chunks('{"k": 1}')
+
+    at.text_area(key="text_input").set_value("doc text")
+    at.button(key="extract_button").click()
+    at.run()
+    assert any('"k": 1' in c.value for c in at.code)
+    assert len(at.download_button) == 1
+
+    # A left-column widget, so this is a full rerun and no button is pressed.
+    at.slider(key="temperature_slider").set_value(0.5)
+    at.run()
+
+    assert any('"k": 1' in c.value for c in at.code)
+    assert len(at.download_button) == 1
+    assert not any("Choose an action" in c.value for c in at.caption)
+
+
 # --- Extract button validation ---
 
 
