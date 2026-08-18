@@ -145,14 +145,18 @@ def _render_output_pane(
             # st.code, not a hand-built ```text fence: `think` is untrusted model
             # output, and a fence inside it would close ours and hand the rest to
             # the Markdown renderer. Markdown-mode reasoning quotes fences often.
-            # Fixed height so the trace scrolls in place instead of growing the
-            # page: the Result pane and its download button sit *below* this, and
-            # an uncapped trace pushes them off-screen for the whole run while the
-            # scroll target keeps moving. An int height is what makes st.code
-            # scroll; "content" (the default) is what lets it grow.
-            reasoning_placeholder.code(
-                think, language=None, wrap_lines=True, height=300
-            )
+            # Fixed height on a *container*, not on st.code, and autoscroll=True.
+            # The pane has to scroll rather than grow, because the Result pane and
+            # its download button sit *below* it and an uncapped trace pushes them
+            # off-screen for the whole run. But st.code exposes no autoscroll, and
+            # this element is re-created on every chunk, so a bare
+            # st.code(height=...) pins the viewport to the *top* of the trace: the
+            # newest tokens stream in below the fold and any manual scroll is
+            # reset by the next chunk. That is worse than growing, where the newest
+            # text was at least always visible. A fixed-height container with
+            # autoscroll is the documented way to tail-follow.
+            trace_box = reasoning_placeholder.container(height=300, autoscroll=True)
+            trace_box.code(think, language=None, wrap_lines=True)
         else:
             reasoning_placeholder.caption("_(no reasoning yet)_")
     else:
