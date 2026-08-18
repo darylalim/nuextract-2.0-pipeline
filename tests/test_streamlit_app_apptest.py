@@ -393,6 +393,58 @@ def test_extract_exception_during_stream_shows_error(at, monkeypatch):
     )
 
 
+def test_failed_run_does_not_replay_the_previous_result(at, monkeypatch):
+    """A failed run supersedes the stored one.
+
+    Storing only on success is not enough: the *previous* run stays stored, so
+    the next full rerun replays it — with a live download button — over the error
+    from the run that actually just happened, presenting stale output as current.
+    """
+
+    def ok_stream(*_, **__):
+        yield '{"good": 1}'
+
+    monkeypatch.setattr("nuextract.stream_extract", ok_stream)
+    at.text_area(key="text_input").set_value("doc text")
+    at.button(key="extract_button").click()
+    at.run()
+    assert any('"good": 1' in c.value for c in at.code)
+    assert len(at.download_button) == 1
+
+    def boom(*_, **__):
+        raise RuntimeError("model crashed mid-stream")
+        yield  # unreachable; makes this a generator
+
+    monkeypatch.setattr("nuextract.stream_extract", boom)
+    at.button(key="extract_button").click()
+    at.run()
+    assert any("model crashed" in e.value for e in at.error)
+    assert not at.download_button
+
+    # A left-column widget: a full rerun with no button pressed, i.e. the replay
+    # path. The crashed run left nothing to replay, so nothing may come back.
+    at.slider(key="temperature_slider").set_value(0.5)
+    at.run()
+
+    assert not any('"good": 1' in c.value for c in at.code)
+    assert not at.download_button
+    assert any("Choose an action" in c.value for c in at.caption)
+
+
+def test_validation_failure_leaves_the_reasoning_pane_captioned(at):
+    """A validation failure still fills both panes.
+
+    The idle branch is skipped whenever a button fired, so a warning-only run
+    used to leave the bold "Reasoning" header over an unwritten placeholder —
+    the void the caption exists to remove — on the most likely first interaction.
+    """
+    at.button(key="extract_button").click()
+    at.run()
+
+    assert any("Provide an image" in w.value for w in at.warning)
+    assert any("no run yet" in c.value for c in at.caption)
+
+
 def test_extract_passes_slider_values_to_stream_extract(at, stream_captor):
     """Temperature and max_tokens sliders flow through to the streaming call."""
     captured, set_chunks = stream_captor
